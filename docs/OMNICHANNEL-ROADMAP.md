@@ -21,7 +21,7 @@
 
 - [x] Базовый Telegram-конвейер: каталог → цена → карточка → правила → ревью → публикация.
 - [x] Read-only подключение категории стабилизаторов с `climat-simf.ru`.
-- [ ] Закрытый пилот из трёх карточек стабилизаторов в Telegram-ревью.
+- [x] Закрытый пилот из трёх карточек стабилизаторов в Telegram-ревью (`pilots.stabilizers_review`).
 - [ ] VK Publisher и адаптация формата поста.
 - [ ] Instagram Publisher через официальный Meta API и форматы пост/Reels/Stories.
 - [ ] YouTube Publisher для Shorts и длинных видео.

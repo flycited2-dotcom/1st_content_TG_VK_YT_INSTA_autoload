@@ -1,0 +1,34 @@
+import json
+from decimal import Decimal
+
+from content_factory.models import Offer
+from content_factory.pilots.stabilizers_review import (
+    apparent_power_va, review_markup, select_pilot_offers,
+)
+
+
+def _offer(sku, power, price=10000, photos=None):
+    return Offer(supplier_sku=sku, source="storefront", brand="Brand",
+                 model=f"Стабилизатор {power}ВА", category_id=10598,
+                 cost=Decimal("5000"), retail_ref=Decimal(str(price)), stock=1,
+                 photos=photos if photos is not None else ["https://x/image.jpg"], attrs={"x": "y"})
+
+
+def test_apparent_power_va_supports_va_and_kva():
+    assert apparent_power_va("Модель 8000ВА") == 8000
+    assert apparent_power_va("Модель 12 кВА") == 12000
+    assert apparent_power_va("Без мощности") is None
+
+
+def test_selects_three_nearest_power_bands_and_requires_media_price():
+    offers = [_offer("a", 1000), _offer("b", 1500), _offer("c", 8000),
+              _offer("d", 12000), _offer("no-photo", 5000, photos=[]),
+              _offer("no-price", 2000, price=0)]
+    selected = select_pilot_offers(offers)
+    assert [o.supplier_sku for o in selected] == ["b", "c", "d"]
+
+
+def test_review_markup_contains_only_manual_publish_or_reject():
+    markup = json.loads(review_markup("abc123"))
+    callbacks = [button["callback_data"] for button in markup["inline_keyboard"][0]]
+    assert callbacks == ["approve:abc123", "reject:abc123"]
