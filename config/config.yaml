@@ -1,0 +1,71 @@
+# Конфиг Контент-завода (несекретный — в git). Секреты (токен бота, id канала, креды БД,
+# токен фотоагента) — ТОЛЬКО в .env (gitignored). Канал/токен берутся из .env, не отсюда.
+
+source:                          # источник контента (БД oasis)
+  warehouse: "Симферополь"
+  categories: [2, 6, 7]          # пилот: кондиционеры
+  exclude_title_patterns: ["%мульти%", "%зимн%", "%виброопор%"]
+
+pricing:
+  default_markup_pct: 5          # опт +5% → округление …90
+  rounding: up_to_90
+  min_margin_abs: 0
+
+content:
+  caption_max: 1024              # лимит подписи фото в Telegram
+  stop_words: ["скидка только сегодня", "звоните"]
+  # descriptions_manifest: "descriptions/manifest.json"   # ручные тексты на серию (опц.)
+
+cards:                           # карточки-картинки (через фотоагент)
+  dir: "/opt/oasis/staticfiles/cf-cards"
+  base_url: "https://splithome.ru/static/cf-cards"
+  default_mode: "mcp"
+  require_for_publish: true      # публиковать только товар с готовой карточкой
+  modes_by_category:             # авто-выбор стиля по category_id (неизвестная → default_mode)
+    2: "mcp"                     # бытовые сплит-системы
+    6: "mcp"                     # полупромышленные
+    7: "mcp"                     # мобильные
+
+fotogen:                         # очередь фотоагента (токен/пути — в .env)
+  api_url: "http://127.0.0.1:8765"
+  per_run: 4                     # бережно к лимитам ChatGPT (жалоба 2026-07-02): ~8 карточек/час
+  max_pending: 6
+  max_total: 100000
+
+telegram:                        # channel_id и токен — из .env (TELEGRAM_CHANNEL_ID/TELEGRAM_BOT_TOKEN)
+  channel_id: ""
+  test_channel_id: ""
+  order_bot: "Sendpr1ce_bot"     # кнопка «📩 Заказать» в постах канала (лиды владельцу)
+  min_seconds_between_posts: 180
+  parse_mode: "HTML"
+
+auto_tasks:                      # полный автомат: превью в ревью-канал по окнам владельца
+  - id: "am"                     # 10 постов с 9 до 10
+    filter: {categories: [2, 6, 7]}
+    count: 2
+    times: ["09:00", "09:12", "09:24", "09:36", "09:48"]
+  - id: "day"                    # 12 постов с 13 до 14
+    filter: {categories: [2, 6, 7]}
+    count: 2
+    times: ["13:00", "13:10", "13:20", "13:30", "13:40", "13:50"]
+  - id: "eve"                    # 10 постов с 17 до 17:30
+    filter: {categories: [2, 6, 7]}
+    count: 2
+    times: ["17:00", "17:06", "17:12", "17:18", "17:24"]
+  # confirm по умолчанию ВКЛ: всё идёт через ревью-канал (TELEGRAM_REVIEW_CHANNEL_ID в .env)
+
+channel_sync:                    # «живой канал»: посты следят за остатками и ценами
+  enabled: true
+  min_price_delta: 100           # править пост при изменении цены от N ₽
+  edit_pause_sec: 4              # пауза между правками (анти-flood Telegram)
+
+review:                          # детерминированные правила (без LLM)
+  price_min: 1000
+  price_max: 1000000
+  require_specs: true
+  require_card: true
+  caption_max: 1024
+
+state:
+  db: "state/content_factory.db"
+  card_jobs_db: "state/card_jobs.db"

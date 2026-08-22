@@ -1,0 +1,359 @@
+"""Вход задач (вариант A) — команды Telegram-боту. Парсер `/plan …` → Task и роутинг
+`/status` `/cancel` `/held`. Сам сетевой бот (long-polling/Bot API) — тонкая обёртка
+вокруг этих чистых функций (подключается в M6); здесь — вся логика, покрытая тестами.
+
+Пример: /plan 10 кондиционеры завтра 10:00,14:00 mode=mcp [confirm] [source=breeze] [cat=2,6]
+"""
+from __future__ import annotations
+import re
+from collections import Counter
+from datetime import date, timedelta
+from content_factory.orchestrator.tasks import Task
+
+# Ключевые слова категорий → частичный фильтр (расширяемо; для пилота — кондиционеры).
+DEFAULT_KEYWORDS = {
+    "кондиционеры": {"categories": [2, 6, 7]},
+    "кондиционер": {"categories": [2, 6, 7]},
+    "настенные": {"categories": [2]},
+}
+
+_TIME = re.compile(r"^\d{1,2}:\d{2}$")
+_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+HELP = ("Команды:\n"
+        "/plan <N> <категория> <завтра|сегодня|ДАТА> <ЧЧ:ММ[,ЧЧ:ММ]> "
+        "[mode=] [source=] [cat=] [confirm] [channel=] [id=]\n"
+        "/status — что в очереди   /cancel <id> — отменить\n"
+        "/auto — авто-контент: статус, /auto on|off — включить/выключить\n"
+        "/pending — посты на подтверждении   /approve <key> — опубликовать   "
+        "/reject <key> — отклонить   /regen <key> — перегенерировать карточку   "
+        "/held — отложенные\n"
+        "Excel: пришлите .xlsx прайс файлом, затем:\n"
+        "/make 10 холодильники beko=3 stinol=* — авто-выбор по категории и квотам\n"
+        "/find генераторы carver — найти и показать список   /pick 1 3 5 — взять номера\n"
+        "/excel — статус конвейера прайса\n"
+        "/task — пошаговая постановка задачи кнопками (категория → список → "
+        "фото/УТП опционально)")
+
+
+def _norm_time(t: str) -> str:
+    h, m = t.split(":")
+    return f"{int(h):02d}:{m}"
+
+
+def parse_plan(text: str, today: date | None = None, keyword_filters: dict | None = None) -> Task:
+    """Разобрать команду /plan в Task. `today` — опорная дата для 'сегодня/завтра'
+    (детерминизм в тестах). Невалидный ввод → ValueError с понятным текстом."""
+    today = today or date.today()
+    kw = keyword_filters or DEFAULT_KEYWORDS
+    parts = (text or "").strip().split()
+    if parts and parts[0].lower().startswith("/plan"):
+        parts = parts[1:]
+
+    count = None
+    mode, channel, tid, confirm = "mcp", "", None, False
+    filt: dict = {}
+    base_date = today
+    times: list[str] = []
+
+    for tok in parts:
+        low = tok.lower()
+        if count is None and tok.isdigit():
+            count = int(tok)
+        elif low == "завтра":
+            base_date = today + timedelta(days=1)
+        elif low == "сегодня":
+            base_date = today
+        elif _DATE.match(tok):
+            y, m, d = map(int, tok.split("-"))
+            base_date = date(y, m, d)
+        elif "," in tok and tok.split(",")[0] and all(_TIME.match(p) for p in tok.split(",") if p):
+            times += [_norm_time(p) for p in tok.split(",") if p]
+        elif _TIME.match(tok):
+            times.append(_norm_time(tok))
+        elif low.startswith("mode="):
+            mode = tok.split("=", 1)[1]
+        elif low.startswith("source="):
+            filt["source"] = tok.split("=", 1)[1]
+        elif low.startswith("cat="):
+            filt["categories"] = [int(x) for x in tok.split("=", 1)[1].split(",") if x]
+        elif low.startswith("channel="):
+            channel = tok.split("=", 1)[1]
+        elif low.startswith("id="):
+            tid = tok.split("=", 1)[1]
+        elif low == "confirm":
+            confirm = True
+        elif low in kw:
+            for k, v in kw[low].items():
+                filt.setdefault(k, v)
+        # неизвестные токены игнорируем (мягкий разбор)
+
+    if count is None:
+        raise ValueError("укажите количество серий (число), напр.: /plan 10 кондиционеры завтра 10:00")
+    if not times:
+        raise ValueError("укажите время (ЧЧ:ММ), напр.: завтра 10:00,14:00")
+    if not filt.get("categories") and not filt.get("source"):
+        raise ValueError("укажите категорию (напр. 'кондиционеры' или cat=2)")
+
+    schedule = [f"{base_date.isoformat()} {t}" for t in times]
+    if not tid:
+        tid = f"plan-{base_date.isoformat()}-{times[0].replace(':', '')}-{count}"
+    return Task(id=tid, filter=filt, count=count, mode=mode, schedule=schedule,
+                channel=channel, confirm=confirm)
+
+
+def _status(queue, auto_state_fn=None) -> str:
+    """Ожидающие задачи — поимённо, выполненные — одной сводкой: раньше done-слоты
+    прошлых дней перечислялись бесконечной простынёй (жалоба владельца 2026-07-07).
+    auto_state_fn() -> bool | None — строка автомата (None = авто не настроено)."""
+    def _with_auto(body: str) -> str:
+        auto_on = auto_state_fn() if auto_state_fn else None
+        if auto_on is not None:
+            body += ("\n🤖 Авто-контент: ▶️ включён (/auto off)" if auto_on
+                     else "\n🤖 Авто-контент: ⏸ выключен (/auto on)")
+        return body
+
+    slots = queue.all_slots()
+    if not slots:
+        return _with_auto("Очередь пуста.")
+    by_task: dict[str, Counter] = {}
+    for s in slots:
+        by_task.setdefault(s.task_id, Counter())[s.status] += 1
+    active = {tid: c for tid, c in by_task.items()
+              if any(k != "done" for k in c)}
+    done_tasks = len(by_task) - len(active)
+    done_slots = sum(c["done"] for c in by_task.values())
+    lines = []
+    if active:
+        lines.append("⏳ В очереди:")
+        for tid, c in active.items():
+            lines.append(f"— {tid}: " + ", ".join(f"{k} {v}" for k, v in c.items()))
+    if done_slots:
+        lines.append(f"✅ Выполнено: {done_tasks} задач ({done_slots} слотов) — "
+                     f"свёрнуто, детали в журнале превью")
+    return _with_auto("\n".join(lines) if lines else "Очередь пуста.")
+
+
+def parse_due_at(text: str, now) -> float | None:
+    """«завтра 9:00» / «сегодня 18:00» / «9:00» / «DD.MM ЧЧ:ММ» → unix-время
+    (расписание /task, 2026-07-07). Голое ЧЧ:ММ, которое уже прошло, — завтра.
+    Непонятный текст → None (вызывающий переспросит)."""
+    from datetime import datetime, timedelta
+    parts = (text or "").strip().lower().split()
+    if not parts:
+        return None
+    day = now.date()
+    if parts[0] == "завтра":
+        day, parts = day + timedelta(days=1), parts[1:]
+    elif parts[0] == "сегодня":
+        parts = parts[1:]
+    elif re.match(r"^\d{1,2}\.\d{1,2}$", parts[0]):
+        d, m = parts[0].split(".")
+        try:
+            day = day.replace(day=int(d), month=int(m))
+        except ValueError:
+            return None
+        parts = parts[1:]
+    if not parts or not _TIME.match(parts[0]):
+        return None
+    h, m = parts[0].split(":")
+    try:
+        due = datetime.combine(day, datetime.min.time()).replace(hour=int(h), minute=int(m))
+    except ValueError:
+        return None
+    if due <= now and (text or "").strip().lower().split()[0] not in ("завтра", "сегодня"):
+        due += timedelta(days=1)                   # голое время в прошлом → завтра
+    return due.timestamp()
+
+
+def parse_make(text: str):
+    """`/make 10 холодильники beko=3 indesit=3 stinol=*` → (count, категория, quotas).
+    Квота `*`/«остальные» = добор до count любыми брендами категории.
+    Количество — строго ПЕРВОЕ слово после /make (не любое число в тексте: иначе
+    «Stinol WSTU 410 C» из списка моделей подхватывает «410» как count — грабля
+    2026-07-03). Если первое слово не число — явная ошибка вместо угадывания."""
+    parts = (text or "").strip().split()
+    if parts and parts[0].lower().startswith("/make"):
+        parts = parts[1:]
+    if not parts or not parts[0].isdigit():
+        raise ValueError("укажите количество первым словом, напр.: /make 10 холодильники beko=3")
+    count = int(parts[0])
+    category = ""
+    quotas: dict = {}
+    for tok in parts[1:]:
+        low = tok.lower()
+        if "=" in low:
+            brand, n = low.split("=", 1)
+            quotas[brand] = None if n in ("*", "остальные", "остальное") else int(n)
+        elif not category:
+            category = low
+    if not category:
+        raise ValueError("укажите категорию, напр.: /make 10 холодильники")
+    if any(n is None for n in quotas.values()):
+        quotas["*"] = None                        # «остальные» = общий добор
+    return count, category, quotas
+
+
+def handle_command(text: str, queue, today: date | None = None, held_provider=None,
+                   confirm_store=None, publish_fn=None, publish_state=None,
+                   regen_fn=None, make_fn=None, find_fn=None, pick_fn=None,
+                   excel_fn=None, price_fn=None, sources_fn=None, markup_fn=None,
+                   auto_fn=None, auto_state_fn=None) -> str:
+    """Маршрутизация команды → действие → текст ответа владельцу.
+    confirm_store/publish_fn/publish_state нужны для confirm-пилота (/approve, /reject, /pending).
+    publish_fn(awaiting) -> PublishResult публикует подтверждённый пост в канал.
+    regen_fn(awaiting) -> bool убирает карточку (файл + запись store) для перегенерации."""
+    text = (text or "").strip()
+    parts = text.split()
+    cmd = (parts[0].lower() if parts else "")
+
+    if cmd.startswith("/find"):
+        if not find_fn:
+            return "❌ excel-источник недоступен"
+        phrase = text.split(maxsplit=1)[1].strip() if len(parts) > 1 else ""
+        if not phrase:
+            return "❌ что ищем? напр.: /find генераторы carver"
+        return find_fn(phrase)
+
+    if cmd.startswith("/pick"):
+        if not pick_fn:
+            return "❌ excel-источник недоступен"
+        nums = [int(t) for t in re.findall(r"\d+", text.split(maxsplit=1)[1])] \
+            if len(parts) > 1 else []
+        if not nums:
+            return "❌ укажите номера из /find, напр.: /pick 1 3 5"
+        return pick_fn(nums)
+
+    if cmd.startswith("/excel"):
+        if not excel_fn:
+            return "❌ excel-источник недоступен"
+        # /excel retry — вернуть failed-позиции в конвейер с чистого листа
+        arg = parts[1].lower() if len(parts) > 1 else ""
+        return excel_fn(arg or None)
+
+    if cmd.startswith("/make"):
+        if not make_fn:
+            return "❌ excel-источник недоступен"
+        try:
+            count, category, quotas = parse_make(text)
+        except ValueError as e:
+            return f"❌ {e}"
+        return make_fn(count, category, quotas)
+
+    if cmd.startswith("/sources"):
+        return sources_fn() if sources_fn else "❌ источники недоступны"
+
+    if cmd.startswith("/markup"):
+        # /markup <слот> <±число>: наценка источника (минус = скидка);
+        # без аргументов — обзор текущих наценок
+        if not markup_fn:
+            return "❌ наценки недоступны"
+        if len(parts) == 1:
+            return markup_fn("", None)
+        try:
+            pct = float(parts[-1].replace(",", "."))
+        except (ValueError, IndexError):
+            return "❌ формат: /markup <слот> <±число>, напр.: /markup manual__ivanov +5"
+        if len(parts) < 3:
+            return "❌ формат: /markup <слот> <±число>"
+        return markup_fn(" ".join(parts[1:-1]), pct)
+
+    if cmd.startswith("/price"):
+        # /price <key> <цена> — ключ может содержать пробелы, цена — ПОСЛЕДНИЙ токен
+        if not price_fn:
+            return "❌ смена цены недоступна"
+        if len(parts) < 3 or not parts[-1].isdigit():
+            return "❌ формат: /price <ключ> <новая цена числом>"
+        key = " ".join(parts[1:-1])
+        return price_fn(key, int(parts[-1]))
+
+    if cmd.startswith("/regen"):
+        if not (confirm_store and regen_fn):
+            return "❌ перегенерация недоступна"
+        if len(parts) < 2:
+            return "❌ укажите ключ: /regen <key>"
+        key = text.split(maxsplit=1)[1].strip()    # ключ может содержать пробелы (серия)
+        a = confirm_store.get(key)
+        if not a:
+            return f"❌ нет такого превью: {key}"
+        regen_fn(a)
+        confirm_store.mark(key, "regen")
+        return (f"🔄 на перегенерации: {key} — карточка будет сгенерирована заново "
+                f"и придёт новым превью")
+
+    if cmd.startswith("/approve"):
+        if not (confirm_store and publish_fn):
+            return "❌ подтверждение недоступно"
+        if len(parts) < 2:
+            return "❌ укажите ключ: /approve <key>"
+        key = text.split(maxsplit=1)[1].strip()    # ключ может содержать пробелы (серия)
+        a = confirm_store.get(key)
+        if not a or a.status != "pending":
+            return f"❌ нет поста на подтверждении: {key}"
+        res = publish_fn(a)
+        if res and res.ok:
+            confirm_store.mark(key, "published")
+            if publish_state:
+                # channel/caption из Awaiting — иначе mark (INSERT OR REPLACE) затрёт
+                # подпись, сохранённую publish_post (нужна для лида «Заказать»).
+                publish_state.mark(key, res.message_id, channel=a.channel, caption=a.caption)
+            return f"✅ опубликовано: {key}"
+        return f"❌ не удалось опубликовать {key}: {getattr(res, 'error', None)}"
+    if cmd.startswith("/reject"):
+        if not confirm_store or len(parts) < 2:
+            return "❌ укажите ключ: /reject <key>"
+        key = text.split(maxsplit=1)[1].strip()    # ключ может содержать пробелы (серия)
+        confirm_store.mark(key, "rejected")
+        return f"Отклонено: {key}"
+    if cmd.startswith("/pending"):
+        items = confirm_store.list_pending() if confirm_store else []
+        if not items:
+            return "На подтверждении ничего нет."
+        return "На подтверждении:\n" + "\n".join(f"— {a.key} → /approve {a.key}" for a in items)
+
+    if cmd.startswith("/plan"):
+        try:
+            t = parse_plan(text, today=today)
+        except ValueError as e:
+            return f"❌ {e}"
+        queue.add(t)
+        extra = ", подтверждение ВКЛ" if t.confirm else ""
+        return (f"✅ Задача {t.id}: {t.count} серий/слот, слотов {len(t.schedule)}, "
+                f"режим {t.mode}{extra}")
+    if cmd.startswith("/auto"):
+        # выключатель и редактор авто-контента: /auto [on|off|times …|count …|
+        # cats …|reset]; логика — orchestrator/auto.py
+        if not auto_fn:
+            return "❌ авто-контент недоступен"
+        return auto_fn(" ".join(parts[1:]).lower() if len(parts) > 1 else None)
+    if cmd.startswith("/status"):
+        return _status(queue, auto_state_fn)
+    if cmd.startswith("/cancel"):
+        parts = text.split()
+        if len(parts) < 2:
+            return "❌ укажите id задачи: /cancel <id>"
+        n = queue.cancel(parts[1])
+        return f"Задача {parts[1]}: отменено слотов {n}"
+    if cmd.startswith("/held"):
+        items = held_provider() if held_provider else []
+        if not items:
+            return "Отложенных (held) нет."
+        return "Отложенные (held):\n" + "\n".join(
+            f"— {k}: {', '.join(r)}" for k, r in items)
+    return HELP
+
+
+def handle_callback(data: str, queue, today: date | None = None,
+                    confirm_store=None, publish_fn=None, publish_state=None,
+                    regen_fn=None) -> str:
+    """Тап inline-кнопки под превью. callback_data = 'approve:<key>' | 'reject:<key>'
+    | 'regen:<key>'. Переиспользует логику команд (ключ может содержать пробелы)."""
+    if not data or ":" not in data:
+        return "❌ неизвестная кнопка"
+    action, key = data.split(":", 1)
+    action = action.strip().lower()
+    if action not in ("approve", "reject", "regen"):
+        return "❌ неизвестное действие"
+    return handle_command(f"/{action} {key}", queue, today=today,
+                          confirm_store=confirm_store, publish_fn=publish_fn,
+                          publish_state=publish_state, regen_fn=regen_fn)

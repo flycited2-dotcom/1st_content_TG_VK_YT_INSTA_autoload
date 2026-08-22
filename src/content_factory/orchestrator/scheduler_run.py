@@ -1,0 +1,145 @@
+"""CLI планировщика (таймер `cf-scheduler`): загрузить план(ы) в очередь, собрать каталог из
+oasis, и на каждый дозревший слот провести серии через конвейер (цена→подпись→ревизия→
+confirm/публикация). Карточки генерит ОТДЕЛЬНЫЙ таймер `cards_run` (мост к фотоагенту) —
+здесь серии без готовой карточки просто откладываются до следующего окна.
+
+  python -m content_factory.orchestrator.scheduler_run
+"""
+from __future__ import annotations
+import json
+import os
+from datetime import date, datetime
+from pathlib import Path
+from decouple import config
+
+from content_factory.config import load_config
+from content_factory.ingest import collect_offers
+from content_factory.ingest.oasis_db import fetch_raw_products
+from content_factory.catalog.series import group_by_series
+from content_factory.publish.telegram import publish_post, send_message, PublishState
+from content_factory.publish.orders import OrderLinks, order_markup
+from content_factory.orchestrator.queue import TaskQueue
+from content_factory.orchestrator.confirm_store import ConfirmStore
+from content_factory.orchestrator.plans import load_plans_into_queue
+from content_factory.orchestrator.auto import maybe_materialize
+from content_factory.orchestrator.scheduler import PipelineContext, run_due
+
+
+def build_context(cfg, token: str, owner_chat: str, pub_state: PublishState,
+                  confirm_store: ConfirmStore, http=None, channel_id: str = "",
+                  utp_lookup=None, review_chat: str = "") -> PipelineContext:
+    """Собрать PipelineContext с реальными действиями (Telegram/state).
+    channel_id — боевой канал из .env (секрет, не из yaml); fallback — cfg.telegram.channel_id.
+    review_chat — ревью-канал для превью ✅/❌; пусто = личка владельца (owner_chat)."""
+    chan = channel_id or cfg.telegram.channel_id
+    review_to = review_chat or owner_chat
+    order_links = OrderLinks(cfg.state.db) if cfg.telegram.order_bot else None
+
+    def publish(group, card, caption):
+        markup = None
+        if order_links is not None:                       # кнопка «📩 Заказать» в посте канала
+            markup = order_markup(cfg.telegram.order_bot, order_links.code_for(group.key))
+        return publish_post(token, chan, card, caption,
+                            http=http, parse_mode=cfg.telegram.parse_mode,
+                            key=group.key, state=pub_state, retries=2,
+                            reply_markup=markup)
+
+    def submit_cards(groups, mode):
+        # карточки добирает отдельный таймер cards_run; здесь только лог
+        print(f"  отложено (нет карточки): {len(groups)} серий, режим {mode}")
+
+    def alert(group, reasons):
+        if token and owner_chat:
+            send_message(token, owner_chat,
+                         f"⚠️ {group.brand} {group.series}: {'; '.join(reasons)}", http=http)
+
+    def confirm(slot, group, card, caption):
+        channel = slot.channel or chan
+        confirm_store.add(group.key, channel, card, caption)
+        if not (token and review_to):
+            return
+        # Превью в ревью-канал: общий preview_markup (✅/❌/🔄/💰 — владелец 2026-07-09:
+        # в авто-превью не было «Изменить цену»). Код через OrderLinks ≤64 байт всегда.
+        from content_factory.orchestrator.excel_run import preview_markup
+        from content_factory.publish.orders import OrderLinks
+        code = OrderLinks(cfg.state.db).code_for(group.key)
+        kb = json.dumps(preview_markup(code), ensure_ascii=False)
+        publish_post(token, review_to, card, f"{caption}\n\n— на подтверждение —",
+                     http=http, parse_mode=cfg.telegram.parse_mode, reply_markup=kb)
+
+    def taken_keys():
+        # анти-дубль: опубликованные + висящие на ревью/отклонённые (regen не блокируется)
+        return pub_state.published_keys() | confirm_store.blocked_keys()
+
+    # наценки из бота (/markup breeze -3, /markup * 8) — поверх yaml
+    from content_factory.pricing.overrides import apply_overrides, markup_overrides
+    pricing_cfg = apply_overrides(cfg.pricing, markup_overrides(cfg.state.db))
+
+    return PipelineContext(
+        cards_dir=cfg.cards.dir, pricing_cfg=pricing_cfg, content_cfg=cfg.content,
+        review_cfg=cfg.review, stop_words=cfg.content.stop_words,
+        require_card=cfg.cards.require_for_publish, default_mode=cfg.default_card_mode,
+        published_keys=taken_keys, publish=publish,
+        submit_cards=submit_cards, alert=alert, confirm=confirm, utp_lookup=utp_lookup)
+
+
+def main():
+    cfg = load_config(Path(os.environ.get("CONTENT_FACTORY_CONFIG", "config/config.yaml")))
+    q = TaskQueue(cfg.state.db)
+    if Path("tasks").is_dir():
+        load_plans_into_queue("tasks", q)
+    maybe_materialize(cfg.auto_tasks, date.today(), q, cfg.state.db)   # автомат с выключателем /auto
+
+    now = datetime.now().strftime("%Y-%m-%d %H:%M")
+    if not q.due(now):
+        print(f"scheduler: дозревших слотов нет ({now})")
+        return
+
+    # каталог нужен только если есть что исполнять
+    if cfg.source.kind == "storefront_api":
+        from content_factory.ingest.storefront_api import collect_storefront_offers
+        token = config(cfg.source.token_env, "")
+        offers = collect_storefront_offers(cfg.source, token)
+    elif cfg.source.kind == "oasis":
+        dsn = {"host": config("DB_HOST", "localhost"), "port": config("DB_PORT", "5432"),
+               "dbname": config("DB_NAME"), "user": config("DB_USER"), "password": config("DB_PASSWORD")}
+        raw = fetch_raw_products(dsn, cfg.source.warehouse,
+                                 cfg.source.catalog.report_category_ids,
+                                 cfg.source.catalog.exclude_title_patterns)
+        # Опт Бриза: в БД сайта у Бриза РОЗНИЦА, опт отдаёт только /leftoversnew/.
+        # API недоступен → пустая карта → мягкий фолбэк на цену из БД (как раньше).
+        from content_factory.ingest.breez import live_base_lookup
+        offers = collect_offers(raw, Path(config("JAC_STOCK_JSON", "")), cfg.source.catalog,
+                                live_base_lookup())
+    else:
+        raise ValueError(f"Неизвестный source.kind: {cfg.source.kind}")
+    groups = group_by_series(offers)
+
+    # УТП Бриза (✓-фичи): тянем один раз; для не-breeze вернёт None (берётся из ТТХ/«Описание»)
+    from content_factory.ingest.breez import fetch_breez_utp_by_nc
+    utp_map = fetch_breez_utp_by_nc()
+
+    def utp_lookup(g):
+        if g.source != "breeze":
+            return None
+        nc = g.representative.supplier_sku.split(":", 1)[-1]
+        return utp_map.get(nc)
+
+    ctx = build_context(cfg, token=config("TELEGRAM_BOT_TOKEN", ""),
+                        owner_chat=config("TELEGRAM_OWNER_CHAT_ID", config("FOTOGEN_CHAT_ID", "")),
+                        pub_state=PublishState(cfg.state.db),
+                        confirm_store=ConfirmStore(cfg.state.db),
+                        channel_id=config("TELEGRAM_CHANNEL_ID", ""), utp_lookup=utp_lookup,
+                        review_chat=config("TELEGRAM_REVIEW_CHANNEL_ID",
+                                           cfg.telegram.review_channel_id))
+    outcomes = run_due(now, q, groups, ctx)
+    pub = sum(len(o.published) for _, o in outcomes)
+    awe = sum(len(o.awaiting) for _, o in outcomes)
+    held = sum(len(o.held) for _, o in outcomes)
+    sub = sum(len(o.submitted) for _, o in outcomes)
+    print(f"scheduler {now}: слотов {len(outcomes)} | опубликовано {pub} | "
+          f"на подтверждении {awe} | held {held} | отложено(нет карточки) {sub}")
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,66 @@
+# Пример конфига Контент-завода. Реальные секреты — в .env (gitignored), НЕ здесь.
+
+source:                      # источник контента (БД oasis)
+  warehouse: "Симферополь"
+  categories: [2, 6, 7]      # пилот: кондиционеры; дальше добавить другие
+  exclude_title_patterns: ["%мульти%", "%зимн%", "%виброопор%"]
+
+pricing:
+  default_markup_pct: 5      # опт +5% → округление …90
+  rounding: up_to_90
+  min_margin_abs: 0
+
+content:
+  caption_max: 1024          # лимит подписи фото в Telegram
+  stop_words: ["скидка только сегодня", "звоните"]
+  descriptions_manifest: "descriptions/manifest.json"   # ручные тексты на серию (опц.)
+
+cards:                       # карточки-картинки (через фотоагент)
+  dir: "/opt/oasis/staticfiles/cf-cards"
+  base_url: "https://splithome.ru/static/cf-cards"
+  default_mode: "mcp"        # стиль по умолчанию (если категории нет в карте ниже)
+  require_for_publish: true  # публиковать только товар с готовой карточкой
+  modes_by_category:         # авто-выбор стиля по category_id товара (детерминированно, без ИИ)
+    2: "mcp"                 # бытовые сплит-системы → МБТ-стиль
+    6: "mcp"                 # облачные кондиционеры
+    7: "mcp"                 # тепловые насосы
+    # при добавлении бойлеров/холодильников/стиралок — допишите их category_id → mode;
+    # неизвестная категория не ломает: берётся default_mode + предупреждение в логе cards_run.
+
+fotogen:                     # очередь фотоагента (значения из .env на сервере)
+  api_url: "http://127.0.0.1:8765"
+  per_run: 10
+  max_pending: 12
+  max_total: 100000
+
+telegram:
+  channel_id: "@your_channel"   # боевой канал (бот — админ); токен в .env
+  test_channel_id: ""           # тестовый канал/личка для прогона
+  review_channel_id: ""         # закрытый ревью-канал (превью с ✅/❌); пусто = в личку владельцу
+  order_bot: ""                 # username бота для кнопки «📩 Заказать» (пусто = без кнопки)
+  min_seconds_between_posts: 180
+  parse_mode: "HTML"
+
+auto_tasks:                     # постоянные авто-задачи: планировщик сам создаёт слоты на сегодня
+  - id: "ac"                    # → task_id = auto-ac-<дата> (каждый день свежие слоты)
+    filter: {categories: [2, 6, 7]}
+    count: 2                    # серий за слот
+    times: ["10:00", "14:00"]   # локальное время сервера
+    # mode: "mcp"               # опц.; по умолчанию — авто по категории (cards.modes_by_category)
+    # confirm: false            # опц.; по умолчанию true — через ревью-канал
+
+channel_sync:                # «живой канал»: посты сами следят за остатками и ценами
+  enabled: false             # вкл. + systemd cf-channel-sync.timer (08:30, до окна постинга)
+  min_price_delta: 100       # править пост при изменении цены от N ₽
+  edit_pause_sec: 4          # пауза между правками (анти-flood Telegram ~20 правок/мин)
+
+review:                      # детерминированные правила (без LLM)
+  price_min: 1000
+  price_max: 1000000
+  require_specs: true
+  require_card: true
+  caption_max: 1024
+
+state:
+  db: "state/content_factory.db"
+  card_jobs_db: "state/card_jobs.db"
