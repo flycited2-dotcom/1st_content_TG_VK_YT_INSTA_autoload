@@ -15,7 +15,7 @@ from decouple import config
 
 from content_factory.config import load_config
 from content_factory.orchestrator.auto import auto_command, auto_enabled
-from content_factory.publish.telegram import publish_post, PublishState, TG_API
+from content_factory.publish.telegram import edit_post_media, publish_post, PublishState, TG_API
 from content_factory.publish.orders import OrderLinks, order_markup
 from content_factory.bot.order_dialog import OrderDialogStore
 from content_factory.bot.order_flow import make_order_flow
@@ -36,6 +36,10 @@ def make_publish_fn(token: str, parse_mode: str, pub_state: PublishState, http=N
         markup = None
         if order_bot and links is not None:
             markup = order_markup(order_bot, links.code_for(a.key))
+        if str(a.channel).startswith("edit|"):
+            _, channel, message_id = str(a.channel).split("|", 2)
+            return edit_post_media(token, channel, int(message_id), a.card_path, a.caption,
+                                   http=http, parse_mode=parse_mode, reply_markup=markup)
         return publish_post(token, a.channel, a.card_path, a.caption, http=http,
                             parse_mode=parse_mode, key=a.key, state=pub_state, retries=2,
                             reply_markup=markup)

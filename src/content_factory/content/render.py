@@ -70,6 +70,8 @@ def _storefront_features(f: dict) -> list[str]:
     warranty = next((str(v).strip() for k, v in attrs.items()
                      if "гарант" in k.lower() and str(v).strip() not in {"", "0", "0.0"}), "")
     if warranty:
+        if warranty.isdigit():
+            warranty += " мес."
         lines.append(f"🛡 Гарантия: {warranty}")
     delivery = attrs.get("Срок поставки, дней")
     if delivery and str(delivery).strip() not in {"0", "0.0"}:

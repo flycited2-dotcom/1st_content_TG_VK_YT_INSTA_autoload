@@ -3,7 +3,7 @@ from decimal import Decimal
 
 from content_factory.models import Offer
 from content_factory.pilots.stabilizers_review import (
-    apparent_power_va, review_markup, select_pilot_offers,
+    apparent_power_va, retired_markup, review_markup, select_pilot_offers,
 )
 
 
@@ -32,3 +32,13 @@ def test_review_markup_contains_only_manual_publish_or_reject():
     markup = json.loads(review_markup("abc123"))
     callbacks = [button["callback_data"] for button in markup["inline_keyboard"][0]]
     assert callbacks == ["approve:abc123", "reject:abc123"]
+
+
+def test_review_markup_can_label_existing_post_replacement():
+    markup = json.loads(review_markup("abc123", "✅ Заменить карточку"))
+    assert markup["inline_keyboard"][0][0]["text"] == "✅ Заменить карточку"
+
+
+def test_retired_markup_has_no_actionable_old_callback():
+    markup = json.loads(retired_markup())
+    assert markup["inline_keyboard"][0][0]["callback_data"] == "noop"

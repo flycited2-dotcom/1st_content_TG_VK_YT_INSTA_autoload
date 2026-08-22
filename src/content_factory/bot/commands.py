@@ -296,7 +296,10 @@ def handle_command(text: str, queue, today: date | None = None, held_provider=No
             if publish_state:
                 # channel/caption из Awaiting — иначе mark (INSERT OR REPLACE) затрёт
                 # подпись, сохранённую publish_post (нужна для лида «Заказать»).
-                publish_state.mark(key, res.message_id, channel=a.channel, caption=a.caption)
+                channel = a.channel
+                if str(channel).startswith("edit|"):
+                    channel = str(channel).split("|", 2)[1]
+                publish_state.mark(key, res.message_id, channel=channel, caption=a.caption)
             return f"✅ опубликовано: {key}"
         return f"❌ не удалось опубликовать {key}: {getattr(res, 'error', None)}"
     if cmd.startswith("/reject"):

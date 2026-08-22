@@ -106,6 +106,14 @@ def test_storefront_availability_sentinel_is_not_shown_as_quantity():
     assert "Крым, Запорожская и Херсонская области" in cap
 
 
+def test_storefront_numeric_warranty_gets_month_unit():
+    o = _offer(sku="storefront:W", model="Стабилизатор 12000ВА")
+    o.source = "storefront"
+    o.attrs = {"Гарантия": "36"}
+    cap = render_caption(o, 22900, CFG)
+    assert "Гарантия: 36 мес." in cap
+
+
 def test_caption_long_override_truncated_keeps_price():
     cfg = ContentConfig(caption_max=1024, stop_words=[],
                         descriptions={"breeze|ballu|olympio": "А" * 5000})

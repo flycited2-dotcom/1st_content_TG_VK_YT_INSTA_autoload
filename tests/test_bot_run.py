@@ -51,6 +51,23 @@ def test_make_publish_fn_uses_awaiting_channel(tmp_path):
     assert captured["path"] == "/botTOK/sendPhoto"
 
 
+def test_make_publish_fn_edits_existing_post_for_revision(tmp_path):
+    card = tmp_path / "v2.png"
+    card.write_bytes(b"PNG")
+    captured = {}
+
+    def handler(req):
+        captured["path"] = req.url.path
+        return httpx.Response(200, json={"ok": True, "result": {"message_id": 599}})
+    http = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.telegram.org")
+    ps = PublishState(tmp_path / "p.db")
+    fn = botrun.make_publish_fn("TOK", "HTML", ps, http=http)
+    res = fn(Awaiting(key="storefront:1", channel="edit|@chan|599",
+                      card_path=str(card), caption="cap", status="pending"))
+    assert res.ok and res.message_id == 599
+    assert captured["path"] == "/botTOK/editMessageMedia"
+
+
 def test_make_regen_fn_removes_card_and_store_entry(tmp_path):
     import sqlite3
     card = tmp_path / "NC_123.jpg"

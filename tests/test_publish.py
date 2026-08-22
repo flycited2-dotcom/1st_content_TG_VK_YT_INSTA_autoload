@@ -1,7 +1,7 @@
 from urllib.parse import parse_qs
 import httpx
 from content_factory.publish.telegram import (
-    publish_post, PublishState, send_message, edit_caption)
+    edit_post_media, publish_post, PublishState, send_message, edit_caption)
 
 
 def _client(handler):
@@ -46,6 +46,24 @@ def test_sendphoto_local_file_multipart(tmp_path):
     assert res.ok and res.message_id == 7
     assert "multipart/form-data" in captured["ctype"]
     assert b"JPEGDATA" in captured["body"]
+
+
+def test_edit_post_media_replaces_local_photo(tmp_path):
+    card = tmp_path / "card.png"
+    card.write_bytes(b"PNGDATA")
+    captured = {}
+
+    def handler(req):
+        captured["path"] = req.url.path
+        captured["body"] = req.content
+        return httpx.Response(200, json={"ok": True, "result": {"message_id": 42}})
+
+    res = edit_post_media("TOK", "@chan", 42, str(card), "Новая карточка",
+                          http=_client(handler), parse_mode="HTML")
+    assert res.ok and res.message_id == 42
+    assert captured["path"] == "/botTOK/editMessageMedia"
+    assert b"PNGDATA" in captured["body"]
+    assert "attach://photo".encode() in captured["body"]
 
 
 def test_caption_truncated_to_limit():

@@ -28,9 +28,9 @@ content:
 cards:
   dir: "state/stabilizers/cards"
   base_url: ""
-  default_mode: mcp
+  default_mode: kbt
   require_for_publish: true
-  modes_by_category: {10598: mcp}
+  modes_by_category: {10598: kbt}
 
 fotogen:
   api_url: "http://127.0.0.1:8765"
