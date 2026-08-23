@@ -41,6 +41,13 @@ telegram:
   min_seconds_between_posts: 180
   parse_mode: "HTML"
 
+vk:
+  enabled: false                 # включить только после dry-run и проверки прав токена
+  owner_id: 0                    # личная страница: положительный id; сообщество: отрицательный
+  token_env: "VK_ACCESS_TOKEN"  # секрет только в .env
+  api_version: "5.199"
+  dry_run: true
+
 auto_tasks:                     # постоянные авто-задачи: планировщик сам создаёт слоты на сегодня
   - id: "ac"                    # → task_id = auto-ac-<дата> (каждый день свежие слоты)
     filter: {categories: [2, 6, 7]}

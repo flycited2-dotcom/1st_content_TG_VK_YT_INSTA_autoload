@@ -54,6 +54,14 @@ telegram:
   min_seconds_between_posts: 300
   parse_mode: HTML
 
+vk:
+  # Первый этап — только формирование payload/превью. Реальная публикация выключена.
+  enabled: true
+  owner_id: 22223507
+  token_env: VK_ACCESS_TOKEN
+  api_version: "5.199"
+  dry_run: true
+
 # Намеренно пусто: никакой автоматической публикации до отдельного пилота и проверки владельцем.
 auto_tasks: []
 channel_sync: {enabled: false}

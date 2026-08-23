@@ -129,3 +129,13 @@ def test_storefront_source_and_retail_pricing_config(tmp_path):
     assert cfg.source.queries == ["стабилизатор"]
     assert cfg.source.category_id == 10598
     assert cfg.pricing.prefer_retail_ref is True
+
+
+def test_vk_config_defaults_to_safe_dry_run(tmp_path):
+    cfg = load_config(_write_cfg(tmp_path,
+        "source: {}\n"
+        "vk: {enabled: true, owner_id: 22223507, token_env: VK_TOKEN, dry_run: true}\n"))
+    assert cfg.vk.enabled is True
+    assert cfg.vk.owner_id == 22223507
+    assert cfg.vk.token_env == "VK_TOKEN"
+    assert cfg.vk.dry_run is True

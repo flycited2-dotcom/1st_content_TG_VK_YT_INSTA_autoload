@@ -57,6 +57,16 @@ class TelegramConfig:
 
 
 @dataclass
+class VkConfig:
+    """VK Wall API. Токен берётся только из переменной token_env."""
+    enabled: bool = False
+    owner_id: int = 0
+    token_env: str = "VK_ACCESS_TOKEN"
+    api_version: str = "5.199"
+    dry_run: bool = True
+
+
+@dataclass
 class ReviewConfig:
     """Границы детерминированной ревизии (без LLM)."""
     price_min: int = 0
@@ -82,6 +92,7 @@ class AppConfig:
     cards_modes_by_category: dict     # {category_id(int): mode} — авто-выбор стиля по категории
     fotogen: FotogenConfigYaml
     telegram: TelegramConfig
+    vk: VkConfig
     review: ReviewConfig
     state: StateConfig
     auto_tasks: list = field(default_factory=list)   # постоянные авто-задачи (сырые dict из yaml;
@@ -156,6 +167,13 @@ def load_config(path: str | Path) -> AppConfig:
                               min_seconds_between_posts=tg.get("min_seconds_between_posts", 180),
                               parse_mode=tg.get("parse_mode", "HTML"))
 
+    vk_raw = d.get("vk", {}) or {}
+    vk = VkConfig(enabled=bool(vk_raw.get("enabled", False)),
+                  owner_id=int(vk_raw.get("owner_id", 0) or 0),
+                  token_env=str(vk_raw.get("token_env", "VK_ACCESS_TOKEN")),
+                  api_version=str(vk_raw.get("api_version", "5.199")),
+                  dry_run=bool(vk_raw.get("dry_run", True)))
+
     rv = d.get("review", {})
     review = ReviewConfig(price_min=rv.get("price_min", 0),
                           price_max=rv.get("price_max", 1_000_000_000),
@@ -170,6 +188,6 @@ def load_config(path: str | Path) -> AppConfig:
     return AppConfig(source=source, pricing=pricing, content=content, cards=cards,
                      default_card_mode=default_card_mode,
                      cards_modes_by_category=modes_by_category, fotogen=fotogen,
-                     telegram=telegram, review=review, state=state,
+                     telegram=telegram, vk=vk, review=review, state=state,
                      auto_tasks=d.get("auto_tasks", []) or [],
                      channel_sync=d.get("channel_sync", {}) or {})

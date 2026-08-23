@@ -3,7 +3,8 @@ from decimal import Decimal
 
 from content_factory.models import Offer
 from content_factory.pilots.stabilizers_review import (
-    apparent_power_va, retired_markup, review_markup, select_pilot_offers,
+    absolute_media_path, apparent_power_va, retired_markup, review_markup,
+    select_pilot_offers,
 )
 
 
@@ -42,3 +43,11 @@ def test_review_markup_can_label_existing_post_replacement():
 def test_retired_markup_has_no_actionable_old_callback():
     markup = json.loads(retired_markup())
     assert markup["inline_keyboard"][0][0]["callback_data"] == "noop"
+
+
+def test_review_media_path_is_absolute_for_bot_running_in_another_directory(tmp_path):
+    card = tmp_path / "cards" / "item.png"
+    card.parent.mkdir()
+    card.write_bytes(b"PNG")
+    assert absolute_media_path(card).is_absolute()
+    assert absolute_media_path(card) == card.resolve()

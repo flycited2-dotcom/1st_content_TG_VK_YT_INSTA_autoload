@@ -85,6 +85,12 @@ def _download_image(http: httpx.Client, url: str, path: Path) -> None:
     path.write_bytes(response.content)
 
 
+def absolute_media_path(path: Path) -> Path:
+    """Review может запускаться из другого checkout, а бот — из /opt/content-factory.
+    В state всегда сохраняем абсолютный путь, иначе approve ищет файл относительно CWD бота."""
+    return Path(path).resolve()
+
+
 def run_pilot(cfg, *, catalog_token: str, telegram_token: str, review_chat: str,
               publish_channel: str, state_db: Path, media_dir: Path, count: int = 3,
               http: httpx.Client | None = None, dry_run: bool = False,
@@ -126,6 +132,7 @@ def run_pilot(cfg, *, catalog_token: str, telegram_token: str, review_chat: str,
             try:
                 if not (creative_path and creative_path.is_file()):
                     _download_image(client, offer.photos[0], image_path)
+                image_path = absolute_media_path(image_path)
                 ok, reasons = review(
                     ReviewItem(price=price.price if price.ok else None, caption=caption,
                                attrs=offer.attrs, card_path=str(image_path), brand=offer.brand,
