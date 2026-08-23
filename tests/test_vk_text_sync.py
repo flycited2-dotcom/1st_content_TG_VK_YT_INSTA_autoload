@@ -28,6 +28,8 @@ def _source_db(path: Path):
             ("manual|sold", 2, 40.0, "@tg", None, "sold",
              "⛔ ПРОДАНО\nКондиционер MBO"),
             ("manual|kettle", 3, 50.0, "@tg", None, "active", "Чайник 1,8 л"),
+            ("excel|copper", 4, 60.0, "@tg", None, "active",
+             "Труба медная Ballu\nДля систем кондиционирования"),
         ]
         c.executemany("INSERT INTO published VALUES(?,?,?,?,?,?,?)", rows)
         c.executemany(
@@ -36,6 +38,7 @@ def _source_db(path: Path):
                 ("breeze|xigma|sky", "@tg", str(card), "", "published", 30.0),
                 ("manual|sold", "@tg", "/cards/sold.jpg", "", "published", 40.0),
                 ("manual|kettle", "@tg", "/cards/kettle.jpg", "", "published", 50.0),
+                ("excel|copper", "@tg", str(card), "", "published", 60.0),
             ],
         )
 
