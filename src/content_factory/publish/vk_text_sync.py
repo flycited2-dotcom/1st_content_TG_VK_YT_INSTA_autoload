@@ -129,11 +129,97 @@ def build_vk_climate_text(caption: str) -> str:
     return f"{body[:room].rstrip()}\n\n{footer}".strip()
 
 
+def build_live_caption_map(config_path: str | Path | None = None) -> dict[str, str]:
+    """Собрать свежие подписи из каталога прямо перед VK-публикацией.
+
+    Telegram здесь остаётся очередью уже отобранных тем, но не источником цены:
+    цена, остаток и модельный ряд повторно считаются из актуального каталога.
+    При недоступном каталоге вызывающий код работает fail-closed и не публикует.
+    """
+    from decouple import config
+
+    from content_factory.catalog.series import group_by_series
+    from content_factory.config import load_config
+    from content_factory.content.render import render_caption
+    from content_factory.pricing.overrides import apply_overrides, markup_overrides
+    from content_factory.pricing.pricing import compute_price
+
+    if config_path is None:
+        configured = os.getenv("CONTENT_FACTORY_CONFIG", "")
+        production = Path("/opt/content-factory/config/config.yaml")
+        config_path = configured or (production if production.is_file() else Path("config/config.yaml"))
+    cfg = load_config(Path(config_path))
+
+    if cfg.source.kind == "storefront_api":
+        from content_factory.ingest.storefront_api import collect_storefront_offers
+        offers = collect_storefront_offers(cfg.source, config(cfg.source.token_env, ""))
+    elif cfg.source.kind == "oasis":
+        from content_factory.ingest import collect_offers
+        from content_factory.ingest.breez import live_base_lookup
+        from content_factory.ingest.oasis_db import fetch_raw_products
+
+        dsn = {
+            "host": config("DB_HOST", "localhost"),
+            "port": config("DB_PORT", "5432"),
+            "dbname": config("DB_NAME"),
+            "user": config("DB_USER"),
+            "password": config("DB_PASSWORD"),
+        }
+        raw = fetch_raw_products(
+            dsn, cfg.source.warehouse, cfg.source.catalog.report_category_ids,
+            cfg.source.catalog.exclude_title_patterns,
+        )
+        offers = collect_offers(
+            raw, Path(config("JAC_STOCK_JSON", "")), cfg.source.catalog,
+            live_base_lookup(),
+        )
+    else:
+        raise ValueError(f"Неизвестный source.kind: {cfg.source.kind}")
+
+    pricing_cfg = apply_overrides(cfg.pricing, markup_overrides(cfg.state.db))
+    from content_factory.ingest.breez import fetch_breez_utp_by_nc
+    utp_map = fetch_breez_utp_by_nc()
+    captions: dict[str, str] = {}
+    for group in group_by_series(offers):
+        if not any((member.stock or 0) > 0 for member in group.members):
+            continue
+        priced = compute_price(group.representative, pricing_cfg)
+        if not priced.ok or priced.price is None:
+            continue
+        member_prices = []
+        for member in group.members:
+            if (member.stock or 0) <= 0:
+                continue
+            member_price = compute_price(member, pricing_cfg)
+            if member_price.ok and member_price.price is not None:
+                member_prices.append((member, member_price.price))
+        utp_raw = None
+        if group.source == "breeze":
+            nc = group.representative.supplier_sku.split(":", 1)[-1]
+            utp_raw = utp_map.get(nc)
+        captions[group.key] = render_caption(
+            group, priced.price, cfg.content, utp_raw=utp_raw,
+            member_prices=member_prices,
+        )
+    return captions
+
+
 def sync_one(source_db: str | Path, state: VkTextSyncState,
-             publisher: VkPublisher) -> VkTextSyncResult:
+             publisher: VkPublisher,
+             live_captions: dict[str, str] | None = None) -> VkTextSyncResult:
     candidate = next_candidate(source_db, state)
     if candidate is None:
         return VkTextSyncResult(ok=True, skipped=True)
+    if live_captions is not None:
+        fresh_caption = live_captions.get(candidate.key)
+        if not fresh_caption:
+            return VkTextSyncResult(
+                ok=False, source_key=candidate.key, manual_photo_path=candidate.card_path,
+                error="live_catalog_missing",
+            )
+        candidate = VkTextCandidate(
+            candidate.key, candidate.source_ts, fresh_caption, candidate.card_path,
+        )
     result = publisher.publish_text(build_vk_climate_text(candidate.caption))
     if not result.ok:
         return VkTextSyncResult(
@@ -171,7 +257,12 @@ def main() -> None:
         os.getenv("VK_ACCESS_TOKEN", ""), args.owner_id,
         dry_run=not args.publish,
     )
-    result = sync_one(args.source_db, state, publisher)
+    try:
+        live_captions = build_live_caption_map()
+    except Exception as exc:  # каталог недоступен → никаких публикаций со старой ценой
+        result = VkTextSyncResult(ok=False, error=f"live_catalog_failed: {exc}")
+    else:
+        result = sync_one(args.source_db, state, publisher, live_captions=live_captions)
     print(json.dumps(asdict(result), ensure_ascii=False))
     if not result.ok:
         raise SystemExit(1)

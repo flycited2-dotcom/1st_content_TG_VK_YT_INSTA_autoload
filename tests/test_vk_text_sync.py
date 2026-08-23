@@ -92,3 +92,47 @@ def test_sync_one_publishes_one_text_post_and_records_manual_photo(tmp_path):
     assert result.manual_photo_path == str(tmp_path / "xigma.jpg")
     assert len(publisher.messages) == 1
     assert next_candidate(source, state) is None
+
+
+def test_sync_one_uses_fresh_catalog_caption_instead_of_stale_telegram_price(tmp_path):
+    source = tmp_path / "source.db"
+    _source_db(source)
+    state = VkTextSyncState(tmp_path / "vk.db")
+
+    class Publisher:
+        def __init__(self):
+            self.messages = []
+
+        def publish_text(self, message):
+            self.messages.append(message)
+            return VkPublishResult(ok=True, post_id=12)
+
+    publisher = Publisher()
+    live = {
+        "breeze|xigma|sky": (
+            "XIGMA Сплит-система SKY\n"
+            "<blockquote><b>16 390 ₽</b></blockquote>\n"
+            "Ключевые особенности:\n✓ До 20 м²"
+        )
+    }
+
+    result = sync_one(source, state, publisher, live_captions=live)
+
+    assert result.ok
+    assert "16 390 ₽" in publisher.messages[0]
+    assert "12 090 ₽" not in publisher.messages[0]
+
+
+def test_sync_one_fails_closed_when_live_catalog_has_no_candidate(tmp_path):
+    source = tmp_path / "source.db"
+    _source_db(source)
+    state = VkTextSyncState(tmp_path / "vk.db")
+
+    class Publisher:
+        def publish_text(self, message):
+            raise AssertionError("публикация с непроверенной ценой запрещена")
+
+    result = sync_one(source, state, Publisher(), live_captions={})
+
+    assert result.ok is False
+    assert result.error == "live_catalog_missing"

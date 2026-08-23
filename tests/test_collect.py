@@ -21,3 +21,20 @@ def test_collect_merges_db_and_jac(tmp_path):
     assert "daichi:N1" in skus and "jac:A1" in skus
     daichi = next(o for o in offers if o.supplier_sku == "daichi:N1")
     assert daichi.cost == Decimal("10000")
+
+
+def test_breeze_offer_keeps_storefront_retail_reference(tmp_path):
+    """Для Бриза БД сайта хранит розницу отдельно от живой закупочной цены API."""
+    db_rows = [RawProduct(
+        source="breeze", nc_code="НС-1", brand="XIGMA", title="SKY XG-SKY21RHA",
+        series="SKY", category_id=2, btu_calc=7,
+        price_wholesale=Decimal("16390"), price_base=None, stock_qty=1,
+        image_urls=["u"], tech={},
+    )]
+    offers = collect_offers(
+        raw_db=db_rows, jac_path=tmp_path / "missing.json", flt=FLT,
+        breez_base_lookup=lambda nc: Decimal("11500"),
+    )
+
+    assert offers[0].cost == Decimal("11500")
+    assert offers[0].retail_ref == Decimal("16390")
