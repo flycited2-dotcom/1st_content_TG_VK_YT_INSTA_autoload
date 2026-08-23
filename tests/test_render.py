@@ -114,6 +114,18 @@ def test_storefront_numeric_warranty_gets_month_unit():
     assert "Гарантия: 36 мес." in cap
 
 
+def test_storefront_stabilizer_keeps_input_voltage_ranges_in_usp():
+    o = _offer(sku="storefront:V", model="POWERMAN AVS 2000S 2000ВА")
+    o.source = "storefront"
+    o.attrs = {
+        "Напряжение (рабочий диапазон)": "140 - 260 В",
+        "Напряжение (расширенный диапазон)": "125-270В",
+    }
+    cap = render_caption(o, 5950, CFG)
+    assert "Рабочий диапазон входного напряжения: 140–260 В" in cap
+    assert "Расширенный диапазон входного напряжения: 125–270 В" in cap
+
+
 def test_caption_long_override_truncated_keeps_price():
     cfg = ContentConfig(caption_max=1024, stop_words=[],
                         descriptions={"breeze|ballu|olympio": "А" * 5000})

@@ -67,6 +67,29 @@ def _storefront_features(f: dict) -> list[str]:
             lines.append(template.format(*values))
     if re.search(r"циф\.?\s*индикац", title, re.I):
         lines.append("🖥 Цифровая индикация напряжения")
+    voltage_lines: list[str] = []
+    title_range = re.search(
+        r"(?:вход\w*|вх\.?|рабоч\w*\s+диапазон|диапазон\s+вход\w*)"
+        r"[^0-9]{0,30}(\d{2,3})\s*[-–—]\s*(\d{2,3})\s*В",
+        title,
+        re.I,
+    )
+    if title_range:
+        voltage_lines.append(
+            f"🔌 Диапазон входного напряжения: {title_range.group(1)}–{title_range.group(2)} В"
+        )
+    for key, value in attrs.items():
+        key_lower = str(key).lower()
+        if "напряж" not in key_lower or "диапазон" not in key_lower:
+            continue
+        match = re.search(r"(\d{2,3})\s*[-–—]\s*(\d{2,3})\s*В?", str(value), re.I)
+        if not match:
+            continue
+        label = "Расширенный диапазон входного напряжения" if any(
+            marker in key_lower for marker in ("расшир", "предель")
+        ) else "Рабочий диапазон входного напряжения"
+        voltage_lines.append(f"🔌 {label}: {match.group(1)}–{match.group(2)} В")
+    lines.extend(dict.fromkeys(voltage_lines))
     warranty = next((str(v).strip() for k, v in attrs.items()
                      if "гарант" in k.lower() and str(v).strip() not in {"", "0", "0.0"}), "")
     if warranty:
@@ -76,7 +99,7 @@ def _storefront_features(f: dict) -> list[str]:
     delivery = attrs.get("Срок поставки, дней")
     if delivery and str(delivery).strip() not in {"0", "0.0"}:
         lines.append(f"🚚 Ориентировочный срок поставки: {delivery} дн.")
-    return list(dict.fromkeys(lines))[:6]
+    return list(dict.fromkeys(lines))[:8]
 
 
 def _render_storefront_caption(f: dict, price, cap_max: int) -> str:

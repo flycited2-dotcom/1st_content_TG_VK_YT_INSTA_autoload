@@ -92,3 +92,28 @@ def test_missing_brand_or_type_fails(tmp_path):
 def test_multiple_reasons_collected(tmp_path):
     ok, reasons = review(_item(tmp_path, price=0, brand="", attrs={}), CFG)
     assert not ok and len(reasons) >= 3
+
+
+def test_stabilizer_without_input_voltage_range_fails(tmp_path):
+    ok, reasons = review(
+        _item(
+            tmp_path,
+            category_id=10598,
+            caption="Стабилизатор 2000 ВА — защита техники от перепадов",
+        ),
+        CFG,
+    )
+    assert not ok
+    assert any("диапазона входного напряжения" in reason for reason in reasons)
+
+
+def test_stabilizer_with_input_voltage_range_passes(tmp_path):
+    ok, reasons = review(
+        _item(
+            tmp_path,
+            category_id=10598,
+            caption="Стабилизатор 2000 ВА\nРабочий диапазон входного напряжения 140–260 В",
+        ),
+        CFG,
+    )
+    assert ok and reasons == []
