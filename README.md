@@ -47,3 +47,17 @@
 
 Эталонный код движка лежит рядом: `../Avito/avito-bridge/` (отдельный git-репо). Не править Avito —
 **копировать/адаптировать** модули по [REUSE-MAP](docs/HANDOFF-FROM-AVITO-BRIDGE.md#карта-переиспользования-кода).
+
+## Авторизация издателя VK
+
+Приложение VK ID пилота: `54732587`. Серверный OAuth 2.1/PKCE хранит короткий
+access token и refresh token только в игнорируемом `state/vk-tokens.json`.
+
+```powershell
+python -m content_factory.publish.vk_oauth start
+python -m content_factory.publish.vk_oauth exchange --callback-url "URL_ПОСЛЕ_АВТОРИЗАЦИИ"
+python -m content_factory.publish.vk_oauth refresh
+```
+
+Запрашиваются только права издателя: `wall photos offline`. Токены, callback URL
+с кодом и содержимое `state/` запрещено добавлять в Git или чат.

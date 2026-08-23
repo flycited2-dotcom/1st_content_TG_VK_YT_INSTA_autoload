@@ -60,8 +60,11 @@ class TelegramConfig:
 class VkConfig:
     """VK Wall API. Токен берётся только из переменной token_env."""
     enabled: bool = False
+    app_id: int = 0
     owner_id: int = 0
     token_env: str = "VK_ACCESS_TOKEN"
+    redirect_uri: str = ""
+    token_store: str = "state/vk-tokens.json"
     api_version: str = "5.199"
     dry_run: bool = True
 
@@ -169,8 +172,11 @@ def load_config(path: str | Path) -> AppConfig:
 
     vk_raw = d.get("vk", {}) or {}
     vk = VkConfig(enabled=bool(vk_raw.get("enabled", False)),
+                  app_id=int(vk_raw.get("app_id", 0) or 0),
                   owner_id=int(vk_raw.get("owner_id", 0) or 0),
                   token_env=str(vk_raw.get("token_env", "VK_ACCESS_TOKEN")),
+                  redirect_uri=str(vk_raw.get("redirect_uri", "") or ""),
+                  token_store=str(vk_raw.get("token_store", "state/vk-tokens.json")),
                   api_version=str(vk_raw.get("api_version", "5.199")),
                   dry_run=bool(vk_raw.get("dry_run", True)))
 

@@ -9,6 +9,8 @@ from pathlib import Path
 
 import httpx
 
+from content_factory.publish.vk_oauth import VkOAuthClient, VkOAuthSettings, VkTokenStore
+
 VK_API = "https://api.vk.com/method"
 VK_MESSAGE_MAX = 4096
 
@@ -60,6 +62,15 @@ class VkPublisher:
         self.api_version = api_version
         self.dry_run = dry_run
         self.http = http or httpx.Client(timeout=60, follow_redirects=True)
+
+    @classmethod
+    def from_oauth_store(cls, *, app_id: int, redirect_uri: str, token_store: str,
+                         owner_id: int, api_version: str = "5.199",
+                         dry_run: bool = True, http: httpx.Client | None = None):
+        """Создать издателя с автоматическим обновлением часового VK ID токена."""
+        oauth = VkOAuthClient(VkOAuthSettings(app_id, redirect_uri), http=http)
+        token = VkTokenStore(token_store).access_token(oauth)
+        return cls(token, owner_id, api_version=api_version, dry_run=dry_run, http=http)
 
     def preview(self, image: str, caption: str) -> dict:
         return {"owner_id": self.owner_id, "message": adapt_vk_text(caption),

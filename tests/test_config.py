@@ -136,6 +136,7 @@ def test_vk_config_defaults_to_safe_dry_run(tmp_path):
         "source: {}\n"
         "vk: {enabled: true, owner_id: 22223507, token_env: VK_TOKEN, dry_run: true}\n"))
     assert cfg.vk.enabled is True
+    assert cfg.vk.app_id == 0
     assert cfg.vk.owner_id == 22223507
     assert cfg.vk.token_env == "VK_TOKEN"
     assert cfg.vk.dry_run is True

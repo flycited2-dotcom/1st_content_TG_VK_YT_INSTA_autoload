@@ -43,8 +43,11 @@ telegram:
 
 vk:
   enabled: false                 # включить только после dry-run и проверки прав токена
+  app_id: 0                      # публичный ID приложения VK ID
   owner_id: 0                    # личная страница: положительный id; сообщество: отрицательный
   token_env: "VK_ACCESS_TOKEN"  # секрет только в .env
+  redirect_uri: ""
+  token_store: "state/vk-tokens.json"  # секреты, каталог state/ исключён из git
   api_version: "5.199"
   dry_run: true
 
