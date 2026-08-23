@@ -120,10 +120,12 @@ def test_storefront_stabilizer_keeps_input_voltage_ranges_in_usp():
     o.attrs = {
         "Напряжение (рабочий диапазон)": "140 - 260 В",
         "Напряжение (расширенный диапазон)": "125-270В",
+        "Напряжение (рабочий диапазон) выходное": "202-237 В",
     }
     cap = render_caption(o, 5950, CFG)
     assert "Рабочий диапазон входного напряжения: 140–260 В" in cap
     assert "Расширенный диапазон входного напряжения: 125–270 В" in cap
+    assert "202–237 В" not in cap
 
 
 def test_caption_long_override_truncated_keeps_price():

@@ -80,7 +80,8 @@ def _storefront_features(f: dict) -> list[str]:
         )
     for key, value in attrs.items():
         key_lower = str(key).lower()
-        if "напряж" not in key_lower or "диапазон" not in key_lower:
+        if ("напряж" not in key_lower or "диапазон" not in key_lower
+                or "выход" in key_lower or "output" in key_lower):
             continue
         match = re.search(r"(\d{2,3})\s*[-–—]\s*(\d{2,3})\s*В?", str(value), re.I)
         if not match:
