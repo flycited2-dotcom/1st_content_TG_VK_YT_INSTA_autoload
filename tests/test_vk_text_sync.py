@@ -67,6 +67,9 @@ def test_build_vk_climate_text_is_clean_and_has_professional_cta():
     assert "Подберём модель под площадь" in text
     assert "splithome.ru" in text
     assert "+7 978 579-29-95" in text
+    assert "Доставка" not in text
+    assert "Запорож" not in text
+    assert "Херсон" not in text
 
 
 def test_sync_one_publishes_one_text_post_and_records_manual_photo(tmp_path):
