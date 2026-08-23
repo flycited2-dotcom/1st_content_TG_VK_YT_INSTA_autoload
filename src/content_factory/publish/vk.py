@@ -6,11 +6,13 @@ import re
 from dataclasses import dataclass
 from html.parser import HTMLParser
 from pathlib import Path
+from urllib.parse import urlencode
 
 import httpx
 
 VK_API = "https://api.vk.com/method"
 VK_MESSAGE_MAX = 4096
+VK_SHARE = "https://vk.com/share.php"
 
 
 class _PlainText(HTMLParser):
@@ -41,6 +43,19 @@ def adapt_vk_text(caption: str, max_chars: int = VK_MESSAGE_MAX) -> str:
     text = re.sub(r"[ \t]+\n", "\n", text)
     text = re.sub(r"\n{3,}", "\n\n", text).strip()
     return text[:max_chars].rstrip()
+
+
+def build_vk_share_url(*, url: str, title: str, description: str,
+                       image_url: str = "") -> str:
+    """Официальное окно ручной публикации VK без выдачи издательского токена."""
+    if not url.startswith("https://"):
+        raise ValueError("VK Share требует публичный HTTPS URL")
+    params = {"url": url, "title": title, "description": description}
+    if image_url:
+        if not image_url.startswith("https://"):
+            raise ValueError("Изображение VK Share должно иметь публичный HTTPS URL")
+        params["image"] = image_url
+    return f"{VK_SHARE}?{urlencode(params)}"
 
 
 @dataclass

@@ -7,7 +7,7 @@ from pathlib import Path
 
 from content_factory.config import load_config
 from content_factory.orchestrator.confirm_store import ConfirmStore
-from content_factory.publish.vk import VkPublisher
+from content_factory.publish.vk import VkPublisher, build_vk_share_url
 
 
 def build_vk_preview(cfg, awaiting) -> dict:
@@ -15,8 +15,19 @@ def build_vk_preview(cfg, awaiting) -> dict:
         raise ValueError("VK выключен в конфигурации")
     if not cfg.vk.dry_run:
         raise ValueError("preview разрешён только при vk.dry_run=true")
-    return VkPublisher("", cfg.vk.owner_id, api_version=cfg.vk.api_version,
-                       dry_run=True).preview(awaiting.card_path, awaiting.caption)
+    payload = VkPublisher("", cfg.vk.owner_id, api_version=cfg.vk.api_version,
+                          dry_run=True).preview(awaiting.card_path, awaiting.caption)
+    if cfg.vk.share_url and cfg.vk.public_image_base_url:
+        image_url = f"{cfg.vk.public_image_base_url.rstrip('/')}/{Path(awaiting.card_path).name}"
+        lines = payload["message"].splitlines()
+        payload["public_image_url"] = image_url
+        payload["share_url"] = build_vk_share_url(
+            url=cfg.vk.share_url,
+            title=lines[0] if lines else "Content Factory",
+            description=payload["message"],
+            image_url=image_url,
+        )
+    return payload
 
 
 def main(argv=None):

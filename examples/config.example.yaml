@@ -48,6 +48,8 @@ vk:
   token_env: "VK_ACCESS_TOKEN"  # секрет только в .env
   redirect_uri: ""
   token_store: "state/vk-tokens.json"  # секреты, каталог state/ исключён из git
+  share_url: ""                        # публичная страница для ручного VK Share
+  public_image_base_url: ""            # HTTPS-каталог утверждённых карточек
   api_version: "5.199"
   dry_run: true
 

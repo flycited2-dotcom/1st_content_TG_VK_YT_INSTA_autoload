@@ -65,6 +65,8 @@ class VkConfig:
     token_env: str = "VK_ACCESS_TOKEN"
     redirect_uri: str = ""
     token_store: str = "state/vk-tokens.json"
+    share_url: str = ""
+    public_image_base_url: str = ""
     api_version: str = "5.199"
     dry_run: bool = True
 
@@ -177,6 +179,8 @@ def load_config(path: str | Path) -> AppConfig:
                   token_env=str(vk_raw.get("token_env", "VK_ACCESS_TOKEN")),
                   redirect_uri=str(vk_raw.get("redirect_uri", "") or ""),
                   token_store=str(vk_raw.get("token_store", "state/vk-tokens.json")),
+                  share_url=str(vk_raw.get("share_url", "") or ""),
+                  public_image_base_url=str(vk_raw.get("public_image_base_url", "") or ""),
                   api_version=str(vk_raw.get("api_version", "5.199")),
                   dry_run=bool(vk_raw.get("dry_run", True)))
 

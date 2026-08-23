@@ -2,7 +2,7 @@ from urllib.parse import parse_qs
 
 import httpx
 
-from content_factory.publish.vk import VkPublisher, adapt_vk_text
+from content_factory.publish.vk import VkPublisher, adapt_vk_text, build_vk_share_url
 from content_factory.pilots.vk_preview import build_vk_preview
 from content_factory.orchestrator.confirm_store import Awaiting
 from content_factory.config import load_config
@@ -26,6 +26,19 @@ def test_vk_dry_run_makes_payload_without_network():
     assert result.ok and result.dry_run
     assert result.payload == {"owner_id": 22223507, "message": "Текст",
                               "image": "card.png", "dry_run": True}
+
+
+def test_vk_share_url_contains_public_page_and_image():
+    share = build_vk_share_url(
+        url="https://climat-simf.ru/",
+        title="RUCELF SRW-12000-D",
+        description="Цена 22 900 ₽",
+        image_url="https://splithome.ru/static/cf-cards/item.png",
+    )
+    query = parse_qs(share.split("?", 1)[1])
+    assert share.startswith("https://vk.com/share.php?")
+    assert query["url"] == ["https://climat-simf.ru/"]
+    assert query["image"] == ["https://splithome.ru/static/cf-cards/item.png"]
 
 
 def test_vk_publish_uploads_photo_then_posts_wall(tmp_path):
@@ -66,3 +79,21 @@ def test_build_vk_preview_from_review_record(tmp_path):
     assert payload["owner_id"] == 22223507
     assert payload["message"] == "Товар\n\n100 ₽"
     assert payload["dry_run"] is True
+
+
+def test_build_vk_preview_adds_manual_share_link(tmp_path):
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        "source: {}\n"
+        "vk:\n"
+        "  enabled: true\n"
+        "  owner_id: 22223507\n"
+        "  dry_run: true\n"
+        "  share_url: https://climat-simf.ru/\n"
+        "  public_image_base_url: https://splithome.ru/static/cf-cards\n",
+        encoding="utf-8")
+    awaiting = Awaiting("storefront:1", "@channel", "/cards/item.png",
+                        "Товар\nЦена", "published")
+    payload = build_vk_preview(load_config(config_path), awaiting)
+    assert payload["public_image_url"].endswith("/item.png")
+    assert payload["share_url"].startswith("https://vk.com/share.php?")
