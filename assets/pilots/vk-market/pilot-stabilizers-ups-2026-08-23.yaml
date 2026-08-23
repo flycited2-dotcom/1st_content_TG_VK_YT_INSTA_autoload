@@ -1,0 +1,85 @@
+generated_at: "2026-08-23T20:38:00+03:00"
+publication_mode: manual_review
+channel: vk_market
+rules:
+  price_source: public_storefront
+  recheck_price_before_publish: true
+  recheck_stock_before_publish: true
+  purchase_price_is_secret: true
+  first_image_ratio: "1:1"
+  delivery_claims_allowed: false
+
+products:
+  - sku: "10752290"
+    brand: "Штиль"
+    model: "ИнСтаб IS3000RT"
+    category: "Стабилизаторы напряжения"
+    title: "Стабилизатор напряжения Штиль ИнСтаб IS3000RT, 3000 ВА"
+    retail_price_rub: 36300
+    stock_status: "В наличии на момент проверки"
+    checked_at: "2026-08-23T20:38:00+03:00"
+    warranty_months: 24
+    image: "assets/pilots/vk-market/shtil-is3000rt-universal-square.png"
+    product_url: "https://climat-simf.ru/product/stabilizator-napryazheniya-shtil-instab-is3000rt-2500vt-3000va-seryy-10752290"
+    description: |-
+      Инверторный стабилизатор для защиты чувствительной техники от перепадов напряжения.
+
+      Основные характеристики:
+      ✅ Полная мощность — 3000 ВА
+      ✅ Активная мощность — 2500 Вт
+      ✅ Универсальное исполнение Rack/Tower
+      ✅ Цифровая индикация параметров сети
+      ✅ Гарантия производителя — 24 месяца
+
+      Подойдёт для котельного оборудования, серверной и другой техники, которой важно стабильное питание.
+
+      Напишите в сообщения сообщества — проверим актуальное наличие и поможем подобрать модель под вашу нагрузку.
+
+  - sku: "9737104"
+    brand: "POWERMAN"
+    model: "AVS 2000S"
+    category: "Стабилизаторы напряжения"
+    title: "Стабилизатор напряжения POWERMAN AVS 2000S, 2000 ВА"
+    retail_price_rub: 5950
+    stock_status: "В наличии на момент проверки"
+    checked_at: "2026-08-23T20:38:00+03:00"
+    image: "assets/pilots/vk-market/powerman-avs-2000s-universal-square.png"
+    product_url: "https://climat-simf.ru/product/stabilizator-powerman-avs-2000s-stupenchatyy-regulyator-tsifrovye-indikatory-urovney-napryazheniya-2000va-9737104"
+    description: |-
+      Настенный стабилизатор для защиты бытового и инженерного оборудования от нестабильного напряжения.
+
+      Основные характеристики:
+      ✅ Полная мощность — 2000 ВА
+      ✅ Ступенчатая стабилизация напряжения
+      ✅ Цифровая индикация входного и выходного напряжения
+      ✅ Настенное размещение
+      ✅ КПД — до 98%
+
+      Компактное решение для техники с подходящей суммарной нагрузкой. Точную мощность стабилизатора подбираем с запасом, с учётом пусковых токов.
+
+      Напишите в сообщения сообщества — проверим актуальное наличие и рассчитаем подходящую мощность.
+
+  - sku: "10471839"
+    brand: "POWERMAN"
+    model: "Back Pro 1050"
+    category: "Источники бесперебойного питания"
+    title: "Источник бесперебойного питания POWERMAN Back Pro 1050, 1050 ВА"
+    retail_price_rub: 9450
+    stock_status: "В наличии на момент проверки"
+    checked_at: "2026-08-23T20:38:00+03:00"
+    warranty_months: 24
+    image: "assets/pilots/vk-market/powerman-back-pro-1050-universal-square.png"
+    product_url: "https://climat-simf.ru/product/istochnik-bespereboynogo-pitaniya-powerman-back-pro-ibp-1050-ups-line-interactive-600w-1050va-530183-10471839"
+    description: |-
+      Line-interactive ИБП для защиты оборудования при отключениях и перепадах напряжения.
+
+      Основные характеристики:
+      ✅ Полная мощность — 1050 ВА
+      ✅ Активная мощность — 600 Вт
+      ✅ Четыре евророзетки
+      ✅ Светодиодная индикация состояния
+      ✅ Гарантия производителя — 24 месяца
+
+      Подойдёт для компьютера, сетевого оборудования, видеонаблюдения и другой совместимой нагрузки. Время автономной работы зависит от фактического потребления подключённой техники.
+
+      Напишите в сообщения сообщества — проверим актуальное наличие и подберём ИБП под вашу нагрузку.

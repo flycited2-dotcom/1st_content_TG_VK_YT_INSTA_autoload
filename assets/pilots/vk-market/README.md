@@ -18,3 +18,10 @@
 - `xigma-sky-universal-square.png` — основной кандидат на первую фотографию;
 - `xigma-sky-mobile-portrait-test.png` — тест вертикальной гипотезы, не использовать
   как стандарт без проверки настольного отображения.
+- `shtil-is3000rt-universal-square.png` — стабилизатор Штиль ИнСтаб IS3000RT;
+- `powerman-avs-2000s-universal-square.png` — стабилизатор POWERMAN AVS 2000S;
+- `powerman-back-pro-1050-universal-square.png` — ИБП POWERMAN Back Pro 1050.
+
+Тексты, розничные цены и ссылки для загрузки трёх новых позиций находятся в
+`pilot-stabilizers-ups-2026-08-23.yaml`. Цена на изображениях намеренно отсутствует:
+перед публикацией она повторно сверяется с карточкой сайта.
