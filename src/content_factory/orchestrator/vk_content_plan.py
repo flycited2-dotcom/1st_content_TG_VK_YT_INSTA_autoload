@@ -27,6 +27,13 @@ from content_factory.publish.vk_text_sync import (
     build_vk_climate_text,
 )
 from content_factory.agents.editorial import build_editorial_drafts
+from content_factory.analytics.vk import (
+    LOW_RISK_TYPES,
+    Publication,
+    VkAnalyticsStore,
+    tracked_caption,
+)
+from content_factory.publish.orders import OrderLinks
 
 
 DEFAULT_PLAN_DB = "/opt/content-factory-vk/state/vk-plan.db"
@@ -249,6 +256,17 @@ class VkContentPlanStore:
     def approve(self, item_id: int) -> bool:
         return self._transition(item_id, ("review",), "approved")
 
+    def auto_approve(self, content_types: tuple[str, ...] | None = None) -> list[int]:
+        """Одобрить только ещё не показанные материалы разрешённых типов."""
+        candidates = [item for item in self.list() if item.status == "planned"]
+        if content_types is not None:
+            candidates = [item for item in candidates if item.content_type in content_types]
+        approved = []
+        for item in candidates:
+            if self._transition(item.id, ("planned",), "approved"):
+                approved.append(item.id)
+        return approved
+
     def reject(self, item_id: int) -> bool:
         return self._transition(item_id, ("review", "approved"), "rejected")
 
@@ -387,11 +405,11 @@ def materialize_editorial_plan(store: VkContentPlanStore, knowledge_path: str | 
     return added
 
 
-def review_caption(item: VkPlanItem, limit: int = 1024) -> str:
+def review_caption(item: VkPlanItem, limit: int = 1024, *, body: str | None = None) -> str:
     due = datetime.fromtimestamp(item.due_at).strftime("%d.%m.%Y %H:%M")
     header = f"VK · {due} · {item.category}\n\n"
     room = int(limit) - len(header)
-    return header + item.caption[:room].rstrip()
+    return header + (body if body is not None else item.caption)[:room].rstrip()
 
 
 def send_text_with_markup(token: str, chat_id: str, text: str, markup: str,
@@ -411,9 +429,13 @@ def run_cycle(*, store: VkContentPlanStore, source_db: str, telegram_token: str,
               review_chat: str, vk_token: str, owner_id: int, now: datetime,
               dry_run: bool = True, http: httpx.Client | None = None,
               editorial_knowledge: str | Path = "config/vk-editorial-sources.yaml",
-              native_photo_enabled: bool = False) -> dict:
+              native_photo_enabled: bool = False, autonomy_level: str = "L1",
+              analytics_store: VkAnalyticsStore | None = None,
+              order_links: OrderLinks | None = None, order_bot: str = "Sendpr1ce_bot",
+              site_url: str = "https://splithome.ru/") -> dict:
     client = http or httpx.Client(timeout=60)
-    result = {"planned": [], "reviewed": [], "scheduled": [], "reminded": [], "errors": []}
+    result = {"planned": [], "auto_approved": [], "reviewed": [], "scheduled": [],
+              "reminded": [], "errors": [], "autonomy_level": autonomy_level}
 
     try:
         live_captions = build_live_caption_map()
@@ -426,20 +448,32 @@ def run_cycle(*, store: VkContentPlanStore, source_db: str, telegram_token: str,
     except Exception as exc:  # каталог недоступен: не планируем материал со старой ценой
         result["errors"].append(f"plan_failed: {exc}")
 
+    if autonomy_level == "L2":
+        result["auto_approved"] = store.auto_approve(LOW_RISK_TYPES)
+    elif autonomy_level == "L3":
+        result["auto_approved"] = store.auto_approve()
+
+    def publication_caption(item: VkPlanItem) -> tuple[str, str]:
+        return tracked_caption(
+            item.caption, item.id, source_key=item.source_key,
+            order_bot=order_bot, links=order_links, base_url=site_url,
+        )
+
     for item in store.for_review(int(now.timestamp())):
+        body, _tracked_url = publication_caption(item)
         if dry_run:
             result["reviewed"].append(item.id)
             continue
         if item.card_path:
             preview = publish_post(
-                telegram_token, review_chat, item.card_path, review_caption(item),
+                telegram_token, review_chat, item.card_path, review_caption(item, body=body),
                 http=client, reply_markup=callback_markup(item.id), retries=1,
             )
             message_id = preview.message_id if preview.ok else None
             error = preview.error
         else:
             message_id = send_text_with_markup(
-                telegram_token, review_chat, review_caption(item, 4000),
+                telegram_token, review_chat, review_caption(item, 4000, body=body),
                 callback_markup(item.id), client,
             )
             error = None if message_id else "Telegram sendMessage failed"
@@ -450,15 +484,23 @@ def run_cycle(*, store: VkContentPlanStore, source_db: str, telegram_token: str,
 
     publisher = VkPublisher(vk_token, owner_id, dry_run=dry_run, http=client)
     for item in store.approved(int(now.timestamp())):
+        body, tracked_url = publication_caption(item)
         native_photo = bool(native_photo_enabled and item.card_path)
         scheduled = (
-            publisher.publish(item.card_path, item.caption, publish_at=item.due_at)
+            publisher.publish(item.card_path, body, publish_at=item.due_at)
             if native_photo else
-            publisher.publish_text(item.caption, publish_at=item.due_at)
+            publisher.publish_text(body, publish_at=item.due_at)
         )
         if scheduled.ok and scheduled.post_id is not None and not scheduled.dry_run:
             if store.mark_scheduled(item.id, scheduled.post_id):
                 result["scheduled"].append(item.id)
+                if analytics_store is not None:
+                    analytics_store.record_publication(Publication(
+                        plan_id=item.id, source_key=item.source_key,
+                        post_id=scheduled.post_id, due_at=item.due_at,
+                        category=item.category, content_type=item.content_type,
+                        tracked_url=tracked_url,
+                    ))
                 due = datetime.fromtimestamp(item.due_at).strftime("%d.%m %H:%M")
                 if native_photo:
                     store.confirm_photo(item.id)
@@ -509,14 +551,30 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--publish", action="store_true", help="отправлять review и создавать отложенные записи")
     args = parser.parse_args(argv)
     publish_enabled = args.publish or os.getenv("VK_PLAN_PUBLISH", "0") == "1"
+    analytics = VkAnalyticsStore(args.state_db)
+    autonomy_level = analytics.level()
+    source_db = str(args.source_db)
     result = run_cycle(
-        store=VkContentPlanStore(args.state_db), source_db=args.source_db,
+        store=VkContentPlanStore(args.state_db), source_db=source_db,
         telegram_token=config("TELEGRAM_BOT_TOKEN", default=""),
         review_chat=config("TELEGRAM_REVIEW_CHANNEL_ID", default=""),
         vk_token=config("VK_ACCESS_TOKEN", default=""), owner_id=args.owner_id,
-        now=datetime.now(), dry_run=not publish_enabled,
+        now=datetime.now(), dry_run=(not publish_enabled or autonomy_level == "L0"),
         native_photo_enabled=os.getenv("VK_NATIVE_PHOTO_ENABLED", "0") == "1",
+        autonomy_level=autonomy_level, analytics_store=analytics,
+        order_links=OrderLinks(source_db),
+        order_bot=os.getenv("VK_ORDER_BOT", "Sendpr1ce_bot"),
+        site_url=os.getenv("VK_SITE_URL", "https://splithome.ru/"),
     )
+    auto_stopped = analytics.record_cycle(len(result["errors"]))
+    result["auto_stopped"] = auto_stopped
+    if auto_stopped:
+        send_message(
+            config("TELEGRAM_BOT_TOKEN", default=""),
+            config("TELEGRAM_REVIEW_CHANNEL_ID", default=""),
+            "⛔ VK-контент-завод автоматически переведён в L0 после трёх "
+            "ошибочных циклов подряд. Публикации остановлены до проверки.",
+        )
     print(json.dumps(result, ensure_ascii=False))
     return 1 if result["errors"] else 0
 

@@ -133,6 +133,23 @@ def test_approved_item_is_not_scheduled_more_than_day_early(tmp_path):
     assert [item.id for item in approved] == [first]
 
 
+def test_l2_auto_approves_low_risk_editorial_but_not_products_or_comparison(tmp_path):
+    store = VkContentPlanStore(tmp_path / "plan.db")
+    now = datetime(2026, 8, 24, 8, 0)
+    rows = [
+        candidate("product", "stabilizers", "RUCELF"),
+        VkPlanCandidate("editorial:useful", 2, "Совет", "", "climate", "EDITORIAL", "useful"),
+        VkPlanCandidate("editorial:comparison", 1, "Сравнение", "", "climate", "EDITORIAL", "comparison"),
+    ]
+    materialize_plan(store, rows, now, max_products=3)
+    approved = store.auto_approve(("useful", "service", "trust"))
+    assert len(approved) == 1
+    statuses = {item.source_key: item.status for item in store.list()}
+    assert statuses["editorial:useful"] == "approved"
+    assert statuses["product"] == "planned"
+    assert statuses["editorial:comparison"] == "planned"
+
+
 def test_editorial_plan_rebalances_product_only_schedule(tmp_path):
     store = VkContentPlanStore(tmp_path / "plan.db")
     now = datetime(2026, 8, 24, 8, 0)

@@ -38,6 +38,16 @@ def test_add_lead_defaults(tmp_path):
     assert lead.qty == 1 and lead.comment == "" and lead.phone == ""
 
 
+def test_context_link_attributes_click_and_lead(tmp_path):
+    ol = OrderLinks(tmp_path / "s.db")
+    code = ol.code_for_context("product:1", origin="vk", content_id="vkp_42")
+    assert ol.attribution_for(code) == ("product:1", "vk", "vkp_42")
+    ol.add_click(7, "buyer", "product:1", origin="vk", content_id="vkp_42")
+    ol.add_lead(7, "buyer", "product:1", origin="vk", content_id="vkp_42")
+    assert ol.clicks()[0].content_id == "vkp_42"
+    assert ol.leads()[0].origin == "vk"
+
+
 def test_item_summary_strips_html(tmp_path):
     ps = PublishState(tmp_path / "s.db")
     ps.mark("breeze|funai|kadzoku", 10, channel="@chan",

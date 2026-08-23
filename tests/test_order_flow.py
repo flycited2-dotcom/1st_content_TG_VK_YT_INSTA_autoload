@@ -30,6 +30,18 @@ def test_start_shows_item_and_qty_buttons(tmp_path):
     buttons = [b["callback_data"] for row in r.markup["inline_keyboard"] for b in row]
     assert "order:qty:1" in buttons and "order:qty:custom" in buttons
     assert store.snapshot("777").step == "awaiting_qty"
+    assert links.clicks()[0].key == key
+
+
+def test_vk_context_is_kept_from_click_to_lead(tmp_path):
+    links, store, key, code, start, callback, text, contact = _setup(tmp_path)
+    tracked = links.code_for_context(key, origin="vk", content_id="vkp_12")
+    start("777", tracked, USER)
+    callback("777", "order:qty:1", USER)
+    callback("777", "order:skip_comment", USER)
+    text("777", "Пропустить", USER)
+    assert links.clicks()[-1].content_id == "vkp_12"
+    assert links.leads()[-1].content_id == "vkp_12"
 
 
 def test_start_unknown_code_no_dialog(tmp_path):
