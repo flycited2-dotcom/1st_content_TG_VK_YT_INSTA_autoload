@@ -56,6 +56,8 @@ def test_stabilizer_vk_comment_expands_usp_and_contacts():
     assert "Гарантия производителя 36 месяцев" in text
     assert "Крыму, Запорожской и Херсонской областям" in text
     assert "+7 978 579-29-95" in text
+    assert "Почему стоит выбрать:\r\n✅ Защищает технику" in text
+    assert len([line for line in text.split("\r\n") if line.startswith("✅ ")]) == 7
 
 
 def test_vk_publish_uploads_photo_then_posts_wall(tmp_path):

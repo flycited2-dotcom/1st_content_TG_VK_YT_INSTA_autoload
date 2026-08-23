@@ -66,7 +66,7 @@ def build_stabilizer_vk_comment(message: str) -> str:
     lines = [line.strip() for line in source.splitlines() if line.strip()]
     title = lines[0] if lines else "Стабилизатор напряжения"
     price = next((line for line in lines if "₽" in line), "Цена по запросу")
-    return "\n".join([
+    return "\r\n".join([
         f"⚡ {title}",
         "",
         price,
