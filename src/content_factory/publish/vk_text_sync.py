@@ -148,7 +148,8 @@ def build_live_caption_map(config_path: str | Path | None = None) -> dict[str, s
         configured = os.getenv("CONTENT_FACTORY_CONFIG", "")
         production = Path("/opt/content-factory/config/config.yaml")
         config_path = configured or (production if production.is_file() else Path("config/config.yaml"))
-    cfg = load_config(Path(config_path))
+    config_file = Path(config_path).resolve()
+    cfg = load_config(config_file)
 
     if cfg.source.kind == "storefront_api":
         from content_factory.ingest.storefront_api import collect_storefront_offers
@@ -176,7 +177,10 @@ def build_live_caption_map(config_path: str | Path | None = None) -> dict[str, s
     else:
         raise ValueError(f"Неизвестный source.kind: {cfg.source.kind}")
 
-    pricing_cfg = apply_overrides(cfg.pricing, markup_overrides(cfg.state.db))
+    source_state_db = Path(os.getenv(
+        "CF_SOURCE_DB", str(config_file.parent.parent / cfg.state.db)
+    ))
+    pricing_cfg = apply_overrides(cfg.pricing, markup_overrides(source_state_db))
     from content_factory.ingest.breez import fetch_breez_utp_by_nc
     utp_map = fetch_breez_utp_by_nc()
     captions: dict[str, str] = {}
