@@ -8,6 +8,7 @@ from content_factory.storefront.vk_catalog import (
     VkStorefrontStore,
     build_items,
     select_anchor_candidates,
+    write_manifest,
 )
 
 
@@ -62,3 +63,11 @@ def test_storefront_store_tracks_price_change_and_missing_item(tmp_path):
     changed = replace(items[0], price=26990)
     assert store.sync([changed]) == {"added": 0, "changed": 1, "removed": 0}
     assert store.sync([]) == {"added": 0, "changed": 0, "removed": 1}
+
+
+def test_manifest_keeps_empty_collection_structure(tmp_path):
+    output = tmp_path / "manifest.json"
+    write_manifest(output, [], [])
+    text = output.read_text(encoding="utf-8")
+    assert "Стабилизаторы напряжения" in text
+    assert '"Стабилизаторы напряжения": 0' in text

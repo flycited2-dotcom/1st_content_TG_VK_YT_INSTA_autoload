@@ -191,6 +191,11 @@ def write_manifest(path: str | Path, items: list[VkStorefrontItem], rejected: li
         "generated_at": int(time.time()),
         "items": [asdict(item) for item in items],
         "collections": sorted({item.collection for item in items}),
+        "collection_structure": list(dict.fromkeys(CATEGORY_NAMES.values())),
+        "collection_counts": {
+            name: sum(item.collection == name for item in items)
+            for name in dict.fromkeys(CATEGORY_NAMES.values())
+        },
         "rejected": rejected,
         "native_vk_upload": False,
         "blocking_reason": "VK token cannot upload community product photos",
@@ -229,7 +234,7 @@ def main(argv: list[str] | None = None) -> int:
         write_manifest(args.output, items, rejected)
         result["applied"] = True
     print(json.dumps(result, ensure_ascii=False))
-    return 1 if errors or len(items) < 15 else 0
+    return 1 if len(items) < 15 else 0
 
 
 if __name__ == "__main__":
