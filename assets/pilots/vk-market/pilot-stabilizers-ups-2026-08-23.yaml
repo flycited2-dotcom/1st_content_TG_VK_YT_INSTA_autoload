@@ -18,6 +18,9 @@ products:
     retail_price_rub: 36300
     stock_status: "В наличии на момент проверки"
     checked_at: "2026-08-23T20:38:00+03:00"
+    vk_post_id: 3
+    vk_publish_at: "2026-08-23T23:09:01+03:00"
+    vk_attachment_status: "manual_required"
     warranty_months: 24
     image: "assets/pilots/vk-market/shtil-is3000rt-universal-square.png"
     product_url: "https://climat-simf.ru/product/stabilizator-napryazheniya-shtil-instab-is3000rt-2500vt-3000va-seryy-10752290"
@@ -43,6 +46,9 @@ products:
     retail_price_rub: 5950
     stock_status: "В наличии на момент проверки"
     checked_at: "2026-08-23T20:38:00+03:00"
+    vk_post_id: 4
+    vk_publish_at: "2026-08-24T17:00:00+03:00"
+    vk_attachment_status: "manual_required"
     image: "assets/pilots/vk-market/powerman-avs-2000s-universal-square.png"
     product_url: "https://climat-simf.ru/product/stabilizator-powerman-avs-2000s-stupenchatyy-regulyator-tsifrovye-indikatory-urovney-napryazheniya-2000va-9737104"
     description: |-
@@ -67,6 +73,9 @@ products:
     retail_price_rub: 9450
     stock_status: "В наличии на момент проверки"
     checked_at: "2026-08-23T20:38:00+03:00"
+    vk_post_id: 5
+    vk_publish_at: "2026-08-25T10:00:00+03:00"
+    vk_attachment_status: "manual_required"
     warranty_months: 24
     image: "assets/pilots/vk-market/powerman-back-pro-1050-universal-square.png"
     product_url: "https://climat-simf.ru/product/istochnik-bespereboynogo-pitaniya-powerman-back-pro-ibp-1050-ups-line-interactive-600w-1050va-530183-10471839"
