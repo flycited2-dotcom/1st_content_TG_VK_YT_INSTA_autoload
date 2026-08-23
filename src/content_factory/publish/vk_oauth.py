@@ -18,7 +18,9 @@ import httpx
 
 VK_ID_AUTHORIZE = "https://id.vk.ru/authorize"
 VK_ID_TOKEN = "https://id.vk.ru/oauth2/auth"
-DEFAULT_SCOPES = ("wall", "photos", "offline")
+# VK ID — контур входа, а не старый VK API publisher. При запросе wall/photos
+# кабинет всё равно выдаёт только vkid.personal_info/offline.
+DEFAULT_SCOPES = ("vkid.personal_info", "offline")
 
 
 def _b64url(data: bytes) -> str:
