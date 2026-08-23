@@ -132,22 +132,37 @@ class VkPublisher:
             return VkPublishResult(ok=False, error=f"файл карточки не найден: {path}",
                                    payload=preview)
         try:
-            upload_params = ({"group_id": abs(self.owner_id)} if self.owner_id < 0 else {})
-            upload = self._api("photos.getWallUploadServer", upload_params)
+            # VK API 5.199 отклоняет photos.getWallUploadServer для ключей
+            # сообщества с ошибкой 27, даже когда у ключа есть право photos.
+            # Канал фотографий сообщений при этом доступен: сохраняем изображение
+            # как photo сообщества и прикрепляем полученный media id к wall.post.
+            is_group = self.owner_id < 0
+            upload_method = (
+                "photos.getMessagesUploadServer" if is_group
+                else "photos.getWallUploadServer"
+            )
+            upload = self._api(upload_method, {})
             with path.open("rb") as fh:
                 upload_response = self.http.post(
                     upload["upload_url"], files={"photo": (path.name, fh.read(), "image/png")})
             upload_response.raise_for_status()
             uploaded = upload_response.json()
             save_params = {k: uploaded[k] for k in ("server", "photo", "hash")}
-            save_params["group_id" if self.owner_id < 0 else "user_id"] = abs(self.owner_id)
-            saved = self._api("photos.saveWallPhoto", save_params)
+            if is_group:
+                save_method = "photos.saveMessagesPhoto"
+            else:
+                save_method = "photos.saveWallPhoto"
+                save_params["user_id"] = abs(self.owner_id)
+            saved = self._api(save_method, save_params)
             photo = saved[0]
+            attachment = f"photo{photo['owner_id']}_{photo['id']}"
+            if photo.get("access_key"):
+                attachment += f"_{photo['access_key']}"
             post = self._api("wall.post", {
                 "owner_id": self.owner_id,
-                "from_group": 1 if self.owner_id < 0 else 0,
+                "from_group": 1 if is_group else 0,
                 "message": preview["message"],
-                "attachments": f"photo{photo['owner_id']}_{photo['id']}",
+                "attachments": attachment,
             })
             return VkPublishResult(ok=True, post_id=int(post["post_id"]), payload=preview)
         except (OSError, KeyError, IndexError, ValueError, RuntimeError,
