@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -34,6 +35,7 @@ from content_factory.analytics.vk import (
     tracked_caption,
 )
 from content_factory.publish.orders import OrderLinks
+from content_factory.dedupe import post_fingerprint, text_similarity
 
 
 DEFAULT_PLAN_DB = "/opt/content-factory-vk/state/vk-plan.db"
@@ -148,9 +150,114 @@ class VkContentPlanStore:
                 "telegram_message_id INTEGER, vk_post_id INTEGER, "
                 "reminder_sent_at INTEGER, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)"
             )
+            connection.execute(
+                "CREATE TABLE IF NOT EXISTS vk_dedupe_registry ("
+                "dedupe_key TEXT PRIMARY KEY,source_key TEXT NOT NULL,"
+                "content_fingerprint TEXT NOT NULL,normalized_text TEXT NOT NULL,"
+                "content_type TEXT NOT NULL,created_at INTEGER NOT NULL)"
+            )
+            connection.execute(
+                "CREATE TABLE IF NOT EXISTS vk_publish_claims ("
+                "dedupe_key TEXT PRIMARY KEY,plan_id INTEGER NOT NULL UNIQUE,claimed_at INTEGER NOT NULL)"
+            )
+            connection.execute(
+                "CREATE TABLE IF NOT EXISTS vk_dedupe_events ("
+                "ts INTEGER NOT NULL,source_key TEXT NOT NULL,dedupe_key TEXT NOT NULL,"
+                "kept_source_key TEXT NOT NULL,reason TEXT NOT NULL)"
+            )
+            self._bootstrap_dedupe(connection)
 
     def _connect(self):
         return sqlite3.connect(self.path)
+
+    @staticmethod
+    def _fingerprint(source_key: str, caption: str, category: str,
+                     brand: str, content_type: str) -> tuple[str, str, str]:
+        dedupe_key, normalized = post_fingerprint(
+            source_key=source_key, caption=caption, category=category,
+            brand=brand, content_type=content_type,
+        )
+        content_fingerprint = hashlib.sha256(
+            normalized.encode("utf-8")
+        ).hexdigest()
+        return dedupe_key, content_fingerprint, normalized
+
+    def _bootstrap_dedupe(self, connection: sqlite3.Connection) -> None:
+        rows = connection.execute(
+            "SELECT id,source_key,category,brand,content_type,caption,vk_post_id,created_at,status "
+            "FROM vk_content_plan ORDER BY CASE status "
+            "WHEN 'photo_confirmed' THEN 0 WHEN 'photo_pending' THEN 1 "
+            "WHEN 'approved' THEN 2 WHEN 'review' THEN 3 WHEN 'planned' THEN 4 ELSE 5 END,id"
+        ).fetchall()
+        for (plan_id, source_key, category, brand, content_type, caption,
+             post_id, created_at, status) in rows:
+            if status not in ACTIVE_STATUSES and post_id is None:
+                continue
+            key, fingerprint, normalized = self._fingerprint(
+                source_key, caption, category, brand, content_type,
+            )
+            near_source = self._near_duplicate_source(
+                connection, normalized, content_type, exclude_source=source_key,
+            )
+            if near_source is not None:
+                connection.execute(
+                    "INSERT INTO vk_dedupe_events(ts,source_key,dedupe_key,kept_source_key,reason) "
+                    "VALUES(?,?,?,?,?)",
+                    (int(time.time()), source_key, key, near_source,
+                     "existing_plan_near_duplicate"),
+                )
+                if status in {"planned", "review", "approved"}:
+                    connection.execute(
+                        "UPDATE vk_content_plan SET status='superseded_duplicate',updated_at=? "
+                        "WHERE id=? AND status IN ('planned','review','approved')",
+                        (int(time.time()), plan_id),
+                    )
+                continue
+            cursor = connection.execute(
+                "INSERT OR IGNORE INTO vk_dedupe_registry "
+                "(dedupe_key,source_key,content_fingerprint,normalized_text,content_type,created_at) "
+                "VALUES(?,?,?,?,?,?)",
+                (key, source_key, fingerprint, normalized, content_type, created_at),
+            )
+            if not cursor.rowcount:
+                kept = connection.execute(
+                    "SELECT source_key FROM vk_dedupe_registry WHERE dedupe_key=?",
+                    (key,),
+                ).fetchone()
+                kept_source = str(kept[0]) if kept else "unknown"
+                if kept_source != source_key:
+                    connection.execute(
+                        "INSERT INTO vk_dedupe_events(ts,source_key,dedupe_key,kept_source_key,reason) "
+                        "VALUES(?,?,?,?,?)",
+                        (int(time.time()), source_key, key, kept_source,
+                         "existing_plan_duplicate"),
+                    )
+                    if status in {"planned", "review", "approved"}:
+                        connection.execute(
+                            "UPDATE vk_content_plan SET status='superseded_duplicate',updated_at=? "
+                            "WHERE id=? AND status IN ('planned','review','approved')",
+                            (int(time.time()), plan_id),
+                        )
+            if post_id is not None:
+                connection.execute(
+                    "INSERT OR IGNORE INTO vk_publish_claims(dedupe_key,plan_id,claimed_at) "
+                    "VALUES(?,?,?)", (key, plan_id, created_at),
+                )
+
+    @staticmethod
+    def _near_duplicate_source(connection: sqlite3.Connection, normalized: str,
+                               content_type: str,
+                               threshold: float = 0.88,
+                               exclude_source: str = "") -> str | None:
+        if content_type == "product" or not normalized:
+            return None
+        rows = connection.execute(
+            "SELECT source_key,normalized_text FROM vk_dedupe_registry WHERE content_type=?",
+            (content_type,),
+        ).fetchall()
+        return next((str(source_key) for source_key, existing in rows
+                     if str(source_key) != str(exclude_source)
+                     and text_similarity(normalized, existing) >= threshold), None)
 
     @staticmethod
     def _item(row) -> VkPlanItem:
@@ -165,14 +272,77 @@ class VkContentPlanStore:
     def add(self, candidate: VkPlanCandidate, due_at: int) -> int | None:
         now = int(time.time())
         with self._connect() as connection:
+            if connection.execute(
+                "SELECT 1 FROM vk_content_plan WHERE source_key=?", (candidate.source_key,),
+            ).fetchone():
+                return None
+            key, fingerprint, normalized = self._fingerprint(
+                candidate.source_key, candidate.caption, candidate.category,
+                candidate.brand, candidate.content_type,
+            )
+            near_source = self._near_duplicate_source(
+                connection, normalized, candidate.content_type,
+            )
+            if connection.execute(
+                "SELECT 1 FROM vk_dedupe_registry WHERE dedupe_key=? OR content_fingerprint=?",
+                (key, fingerprint),
+            ).fetchone() or near_source is not None:
+                kept = connection.execute(
+                    "SELECT source_key,dedupe_key FROM vk_dedupe_registry "
+                    "WHERE dedupe_key=? OR content_fingerprint=? LIMIT 1",
+                    (key, fingerprint),
+                ).fetchone()
+                connection.execute(
+                    "INSERT INTO vk_dedupe_events(ts,source_key,dedupe_key,kept_source_key,reason) "
+                    "VALUES(?,?,?,?,?)",
+                    (now, candidate.source_key, key,
+                     str(kept[0]) if kept else str(near_source or "near_match"),
+                     "exact_or_near_duplicate"),
+                )
+                return None
+            connection.execute(
+                "INSERT INTO vk_dedupe_registry "
+                "(dedupe_key,source_key,content_fingerprint,normalized_text,content_type,created_at) "
+                "VALUES(?,?,?,?,?,?)",
+                (key, candidate.source_key, fingerprint, normalized,
+                 candidate.content_type, now),
+            )
             cursor = connection.execute(
-                "INSERT OR IGNORE INTO vk_content_plan "
+                "INSERT INTO vk_content_plan "
                 "(source_key,due_at,category,brand,content_type,caption,card_path,status,"
                 "created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
                 (candidate.source_key, int(due_at), candidate.category, candidate.brand,
                  candidate.content_type, candidate.caption, candidate.card_path, "planned", now, now),
             )
-            return int(cursor.lastrowid) if cursor.rowcount else None
+            return int(cursor.lastrowid)
+
+    def claim_publication(self, item_id: int) -> bool:
+        item = self.get(item_id)
+        if item is None:
+            return False
+        key, _fingerprint, _normalized = self._fingerprint(
+            item.source_key, item.caption, item.category, item.brand, item.content_type,
+        )
+        with self._connect() as connection:
+            cursor = connection.execute(
+                "INSERT OR IGNORE INTO vk_publish_claims(dedupe_key,plan_id,claimed_at) "
+                "VALUES(?,?,?)", (key, item.id, int(time.time())),
+            )
+        return bool(cursor.rowcount)
+
+    def release_publication_claim(self, item_id: int) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                "DELETE FROM vk_publish_claims WHERE plan_id=?", (int(item_id),),
+            )
+
+    def dedupe_counts(self) -> dict[str, int]:
+        with self._connect() as connection:
+            registry = connection.execute("SELECT COUNT(*) FROM vk_dedupe_registry").fetchone()[0]
+            claims = connection.execute("SELECT COUNT(*) FROM vk_publish_claims").fetchone()[0]
+            blocked = connection.execute("SELECT COUNT(*) FROM vk_dedupe_events").fetchone()[0]
+        return {"registry": int(registry), "published_claims": int(claims),
+                "blocked": int(blocked)}
 
     def synchronize_candidates(self, candidates: list[VkPlanCandidate]) -> dict[str, int]:
         """Обновить ещё не отправленные позиции и снять исчезнувшие из наличия.
@@ -486,6 +656,11 @@ def run_cycle(*, store: VkContentPlanStore, source_db: str, telegram_token: str,
     for item in store.approved(int(now.timestamp())):
         body, tracked_url = publication_caption(item)
         native_photo = bool(native_photo_enabled and item.card_path)
+        if not dry_run and not store.claim_publication(item.id):
+            result["errors"].append(
+                f"schedule {item.id}: duplicate publication fingerprint blocked"
+            )
+            continue
         scheduled = (
             publisher.publish(item.card_path, body, publish_at=item.due_at)
             if native_photo else
@@ -524,8 +699,12 @@ def run_cycle(*, store: VkContentPlanStore, source_db: str, telegram_token: str,
                         "Это редакционный текст без товарной фотографии.",
                         http=client,
                     )
-        elif scheduled.error:
-            result["errors"].append(f"schedule {item.id}: {scheduled.error}")
+        elif not scheduled.ok:
+            if not dry_run:
+                store.release_publication_claim(item.id)
+            result["errors"].append(
+                f"schedule {item.id}: {scheduled.error or 'VK did not accept publication'}"
+            )
 
     for item in store.reminders(int(now.timestamp())):
         if dry_run:
@@ -540,6 +719,7 @@ def run_cycle(*, store: VkContentPlanStore, source_db: str, telegram_token: str,
         )
         if ok and store.mark_reminded(item.id):
             result["reminded"].append(item.id)
+    result["dedupe"] = store.dedupe_counts()
     return result
 
 

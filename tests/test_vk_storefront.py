@@ -71,3 +71,24 @@ def test_manifest_keeps_empty_collection_structure(tmp_path):
     text = output.read_text(encoding="utf-8")
     assert "Стабилизаторы напряжения" in text
     assert '"Стабилизаторы напряжения": 0' in text
+
+
+def test_storefront_deduplicates_same_model_across_supplier_keys(tmp_path):
+    image = tmp_path / "square.png"
+    Image.new("RGB", (100, 100), "white").save(image)
+    first = make_candidate(image, key="supplier-a", brand="RUCELF", ts=2,
+                           category="stabilizers")
+    first = replace(first, caption="RUCELF SRW-12000-D стабилизатор\n💎 22 900 ₽")
+    duplicate = make_candidate(image, key="supplier-b", brand="RUCELF", ts=1,
+                               category="stabilizers")
+    duplicate = replace(
+        duplicate,
+        caption="Стабилизатор RUCELF SRW 12000 D\n💎 23 100 ₽",
+    )
+    items, rejected = build_items(
+        [duplicate, first], limit=20, public_image_base="https://example.test/cards",
+        order_bot="OrderBot", order_links=OrderLinks(tmp_path / "orders.db"),
+    )
+    assert len(items) == 1
+    assert items[0].source_key == "supplier-a"
+    assert any("дубль модели supplier-a" in reason for reason in rejected)

@@ -1,5 +1,6 @@
 from datetime import datetime
 from pathlib import Path
+import sqlite3
 
 from content_factory.orchestrator.vk_content_plan import (
     VkContentPlanStore,
@@ -148,6 +149,76 @@ def test_l2_auto_approves_low_risk_editorial_but_not_products_or_comparison(tmp_
     assert statuses["editorial:useful"] == "approved"
     assert statuses["product"] == "planned"
     assert statuses["editorial:comparison"] == "planned"
+
+
+def test_product_dedupe_blocks_same_model_from_another_source(tmp_path):
+    store = VkContentPlanStore(tmp_path / "plan.db")
+    first = VkPlanCandidate(
+        "breeze:rucelf:srw12000", 2,
+        "RUCELF SRW-12000-D — стабилизатор напряжения\n22 900 ₽",
+        "/one.png", "stabilizers", "RUCELF", "product",
+    )
+    duplicate = VkPlanCandidate(
+        "supplier2:rucelf:srw-12000-d", 1,
+        "Стабилизатор RUCELF SRW 12000 D\nЦена 23 100 ₽",
+        "/two.png", "stabilizers", "RUCELF", "product",
+    )
+    assert store.add(first, 100) is not None
+    assert store.add(duplicate, 200) is None
+    assert len(store.list()) == 1
+    assert store.dedupe_counts()["registry"] == 1
+
+
+def test_editorial_dedupe_ignores_punctuation_urls_and_cta(tmp_path):
+    store = VkContentPlanStore(tmp_path / "plan.db")
+    first = VkPlanCandidate(
+        "editorial:first", 2,
+        "Почему важно очищать фильтры кондиционера? Делайте это регулярно.\n"
+        "🌐 https://splithome.ru/?utm_source=vk",
+        "", "air_conditioners", "EDITORIAL", "useful",
+    )
+    duplicate = VkPlanCandidate(
+        "editorial:second", 1,
+        "Почему важно очищать фильтры кондиционера — делайте это регулярно!\n"
+        "Напишите или позвоните нам.",
+        "", "air_conditioners", "EDITORIAL", "useful",
+    )
+    assert store.add(first, 100) is not None
+    assert store.add(duplicate, 200) is None
+
+
+def test_publish_claim_is_single_use_but_releasable_after_api_error(tmp_path):
+    store = VkContentPlanStore(tmp_path / "plan.db")
+    item_id = store.add(candidate("one", "stabilizers", "RUCELF"), 100)
+    assert store.claim_publication(item_id)
+    assert not store.claim_publication(item_id)
+    store.release_publication_claim(item_id)
+    assert store.claim_publication(item_id)
+
+
+def test_existing_active_duplicates_are_superseded_once_on_migration(tmp_path):
+    path = tmp_path / "plan.db"
+    store = VkContentPlanStore(path)
+    first = VkPlanCandidate(
+        "supplier:a", 2, "RUCELF SRW-12000-D стабилизатор", "/one.png",
+        "stabilizers", "RUCELF", "product",
+    )
+    first_id = store.add(first, 100)
+    with sqlite3.connect(path) as connection:
+        connection.execute(
+            "INSERT INTO vk_content_plan(source_key,due_at,category,brand,content_type,"
+            "caption,card_path,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+            ("supplier:b", 200, "stabilizers", "RUCELF", "product",
+             "Стабилизатор RUCELF SRW 12000 D", "/two.png", "planned", 2, 2),
+        )
+        connection.execute("DELETE FROM vk_dedupe_registry")
+    migrated = VkContentPlanStore(path)
+    statuses = {item.source_key: item.status for item in migrated.list()}
+    assert statuses["supplier:a"] == "planned"
+    assert statuses["supplier:b"] == "superseded_duplicate"
+    assert migrated.dedupe_counts()["blocked"] == 1
+    # Повторная инициализация не должна заблокировать сохранённый оригинал.
+    assert VkContentPlanStore(path).get(first_id).status == "planned"
 
 
 def test_editorial_plan_rebalances_product_only_schedule(tmp_path):

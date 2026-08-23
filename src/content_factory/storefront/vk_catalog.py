@@ -26,6 +26,7 @@ from content_factory.orchestrator.vk_content_plan import (
 )
 from content_factory.publish.orders import OrderLinks
 from content_factory.publish.vk_text_sync import build_live_caption_map
+from content_factory.dedupe import canonical_product_identity
 
 
 PRICE_RE = re.compile(r"(?:от\s+)?([\d\s]+)\s*₽")
@@ -104,15 +105,36 @@ def build_items(candidates: list[VkPlanCandidate], *, limit: int, public_image_b
             continue
         valid.append(candidate)
 
+    # Один и тот же аппарат может прийти от нескольких поставщиков под разными
+    # source_key. Оставляем наиболее свежую запись канонической модели.
+    unique: list[VkPlanCandidate] = []
+    seen_models: dict[str, str] = {}
+    for candidate in sorted(valid, key=lambda item: (-item.source_ts, item.source_key)):
+        identity = canonical_product_identity(
+            source_key=candidate.source_key, caption=candidate.caption,
+            category=candidate.category, brand=candidate.brand,
+        )
+        if identity in seen_models:
+            rejected.append(
+                f"{candidate.source_key}: дубль модели {seen_models[identity]}"
+            )
+            continue
+        seen_models[identity] = candidate.source_key
+        unique.append(candidate)
+
     items = []
-    for candidate in select_anchor_candidates(valid, limit):
+    for candidate in select_anchor_candidates(unique, limit):
         size = _image_size(candidate.card_path)
         price = _price(candidate.caption)
         title = next(line.strip() for line in candidate.caption.splitlines() if line.strip())
         code = order_links.code_for(candidate.source_key)
         filename = Path(candidate.card_path).name
+        identity = canonical_product_identity(
+            source_key=candidate.source_key, caption=candidate.caption,
+            category=candidate.category, brand=candidate.brand,
+        )
         items.append(VkStorefrontItem(
-            item_id=hashlib.sha1(candidate.source_key.encode("utf-8")).hexdigest()[:12],
+            item_id=hashlib.sha1(identity.encode("utf-8")).hexdigest()[:12],
             source_key=candidate.source_key, title=title[:120], price=int(price),
             category=candidate.category,
             collection=CATEGORY_NAMES.get(candidate.category, CATEGORY_NAMES["climate"]),
