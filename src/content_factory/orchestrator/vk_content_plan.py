@@ -19,13 +19,14 @@ from pathlib import Path
 import httpx
 from decouple import config
 
-from content_factory.publish.telegram import publish_post
+from content_factory.publish.telegram import publish_post, send_message
 from content_factory.publish.vk import VkPublisher, adapt_vk_text
 from content_factory.publish.vk_text_sync import (
     _published_rows,
     build_live_caption_map,
     build_vk_climate_text,
 )
+from content_factory.agents.editorial import build_editorial_drafts
 
 
 DEFAULT_PLAN_DB = "/opt/content-factory-vk/state/vk-plan.db"
@@ -41,6 +42,7 @@ class VkPlanCandidate:
     card_path: str
     category: str
     brand: str
+    content_type: str = "product"
 
 
 @dataclass(frozen=True)
@@ -161,7 +163,7 @@ class VkContentPlanStore:
                 "(source_key,due_at,category,brand,content_type,caption,card_path,status,"
                 "created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
                 (candidate.source_key, int(due_at), candidate.category, candidate.brand,
-                 "product", candidate.caption, candidate.card_path, "planned", now, now),
+                 candidate.content_type, candidate.caption, candidate.card_path, "planned", now, now),
             )
             return int(cursor.lastrowid) if cursor.rowcount else None
 
@@ -178,7 +180,7 @@ class VkContentPlanStore:
         with self._connect() as connection:
             rows = connection.execute(
                 "SELECT source_key,caption,card_path,status FROM vk_content_plan "
-                "WHERE status IN ('planned','review','approved')"
+                "WHERE content_type='product' AND status IN ('planned','review','approved')"
             ).fetchall()
             for source_key, caption, card_path, status in rows:
                 candidate = by_key.get(str(source_key))
@@ -260,6 +262,18 @@ class VkContentPlanStore:
         return self._transition(item_id, ("photo_pending",), "photo_pending",
                                 reminder_sent_at=int(time.time()))
 
+    def rebalance_products(self, max_products: int = 3, now: int | None = None) -> int:
+        """Оставить квоту товарных слотов, не трогая уже показанные владельцу записи."""
+        active = [item for item in self.list()
+                  if item.content_type == "product" and item.status in ACTIVE_STATUSES
+                  and (now is None or item.due_at > int(now))]
+        remove_count = max(0, len(active) - int(max_products))
+        removable = [item for item in reversed(active) if item.status == "planned"]
+        changed = 0
+        for item in removable[:remove_count]:
+            changed += int(self._transition(item.id, ("planned",), "superseded"))
+        return changed
+
     def for_review(self, now: int, lead_hours: int = 48, limit: int = 1) -> list[VkPlanItem]:
         upper = int(now) + int(lead_hours) * 3600
         return [item for item in self.list()
@@ -324,15 +338,22 @@ def load_candidates(source_db: str | Path, live_captions: dict[str, str]) -> lis
 
 
 def materialize_plan(store: VkContentPlanStore, candidates: list[VkPlanCandidate],
-                     now: datetime, horizon_days: int = 14) -> list[int]:
+                     now: datetime, horizon_days: int = 14,
+                     max_products: int = 3) -> list[int]:
     store.synchronize_candidates(candidates)
+    store.rebalance_products(max_products, int(now.timestamp()))
     slots = plan_slots(now, horizon_days=horizon_days)
     occupied = {item.due_at for item in store.list() if item.status in ACTIVE_STATUSES}
     free_slots = [slot for slot in slots if slot not in occupied]
     existing = store.source_keys()
+    current_products = sum(
+        item.content_type == "product" and item.status in ACTIVE_STATUSES
+        and item.due_at > int(now.timestamp())
+        for item in store.list()
+    )
     selected = choose_candidates(
         [candidate for candidate in candidates if candidate.source_key not in existing],
-        len(free_slots),
+        min(len(free_slots), max(0, int(max_products) - current_products)),
     )
     added: list[int] = []
     for candidate, due_at in zip(selected, free_slots):
@@ -342,28 +363,54 @@ def materialize_plan(store: VkContentPlanStore, candidates: list[VkPlanCandidate
     return added
 
 
-def review_caption(item: VkPlanItem) -> str:
+def materialize_editorial_plan(store: VkContentPlanStore, knowledge_path: str | Path,
+                               now: datetime, horizon_days: int = 14) -> list[int]:
+    slots = plan_slots(now, horizon_days=horizon_days)
+    occupied = {item.due_at for item in store.list() if item.status in ACTIVE_STATUSES}
+    free_slots = [slot for slot in slots if slot not in occupied]
+    cutoff = int((now - timedelta(days=14)).timestamp())
+    used = {item.source_key.split(":")[1] for item in store.list()
+            if item.source_key.startswith("editorial:") and item.due_at >= cutoff}
+    drafts = build_editorial_drafts(
+        knowledge_path, used, len(free_slots), audit_db=store.path,
+    )
+    added = []
+    for draft, due_at in zip(drafts, free_slots):
+        item_id = store.add(VkPlanCandidate(
+            source_key=f"editorial:{draft.idea_id}:{datetime.fromtimestamp(due_at):%Y%m%d}",
+            source_ts=float(due_at),
+            caption=draft.text, card_path="", category=draft.category,
+            brand="EDITORIAL", content_type=draft.content_type,
+        ), due_at)
+        if item_id is not None:
+            added.append(item_id)
+    return added
+
+
+def review_caption(item: VkPlanItem, limit: int = 1024) -> str:
     due = datetime.fromtimestamp(item.due_at).strftime("%d.%m.%Y %H:%M")
     header = f"VK · {due} · {item.category}\n\n"
-    room = 1024 - len(header)
+    room = int(limit) - len(header)
     return header + item.caption[:room].rstrip()
 
 
 def send_text_with_markup(token: str, chat_id: str, text: str, markup: str,
-                          http: httpx.Client) -> bool:
+                          http: httpx.Client) -> int | None:
     try:
         response = http.post(
             f"https://api.telegram.org/bot{token}/sendMessage",
             data={"chat_id": str(chat_id), "text": text, "reply_markup": markup},
         )
-        return bool((response.json() or {}).get("ok"))
+        payload = response.json() or {}
+        return int((payload.get("result") or {}).get("message_id")) if payload.get("ok") else None
     except (httpx.HTTPError, ValueError):
-        return False
+        return None
 
 
 def run_cycle(*, store: VkContentPlanStore, source_db: str, telegram_token: str,
               review_chat: str, vk_token: str, owner_id: int, now: datetime,
-              dry_run: bool = True, http: httpx.Client | None = None) -> dict:
+              dry_run: bool = True, http: httpx.Client | None = None,
+              editorial_knowledge: str | Path = "config/vk-editorial-sources.yaml") -> dict:
     client = http or httpx.Client(timeout=60)
     result = {"planned": [], "reviewed": [], "scheduled": [], "reminded": [], "errors": []}
 
@@ -371,6 +418,10 @@ def run_cycle(*, store: VkContentPlanStore, source_db: str, telegram_token: str,
         live_captions = build_live_caption_map()
         candidates = load_candidates(source_db, live_captions)
         result["planned"] = materialize_plan(store, candidates, now)
+        if Path(editorial_knowledge).is_file():
+            result["planned"].extend(materialize_editorial_plan(
+                store, editorial_knowledge, now,
+            ))
     except Exception as exc:  # каталог недоступен: не планируем материал со старой ценой
         result["errors"].append(f"plan_failed: {exc}")
 
@@ -378,14 +429,23 @@ def run_cycle(*, store: VkContentPlanStore, source_db: str, telegram_token: str,
         if dry_run:
             result["reviewed"].append(item.id)
             continue
-        preview = publish_post(
-            telegram_token, review_chat, item.card_path, review_caption(item),
-            http=client, reply_markup=callback_markup(item.id), retries=1,
-        )
-        if preview.ok and store.mark_review(item.id, preview.message_id):
+        if item.card_path:
+            preview = publish_post(
+                telegram_token, review_chat, item.card_path, review_caption(item),
+                http=client, reply_markup=callback_markup(item.id), retries=1,
+            )
+            message_id = preview.message_id if preview.ok else None
+            error = preview.error
+        else:
+            message_id = send_text_with_markup(
+                telegram_token, review_chat, review_caption(item, 4000),
+                callback_markup(item.id), client,
+            )
+            error = None if message_id else "Telegram sendMessage failed"
+        if message_id and store.mark_review(item.id, message_id):
             result["reviewed"].append(item.id)
         else:
-            result["errors"].append(f"review {item.id}: {preview.error or 'state conflict'}")
+            result["errors"].append(f"review {item.id}: {error or 'state conflict'}")
 
     publisher = VkPublisher(vk_token, owner_id, dry_run=dry_run, http=client)
     for item in store.approved(int(now.timestamp())):
@@ -394,12 +454,21 @@ def run_cycle(*, store: VkContentPlanStore, source_db: str, telegram_token: str,
             if store.mark_scheduled(item.id, scheduled.post_id):
                 result["scheduled"].append(item.id)
                 due = datetime.fromtimestamp(item.due_at).strftime("%d.%m %H:%M")
-                send_text_with_markup(
-                    telegram_token, review_chat,
-                    f"VK-пост №{scheduled.post_id} запланирован на {due}. "
-                    "Прикрепите карточку к отложенной записи и подтвердите кнопкой.",
-                    photo_markup(item.id), client,
-                )
+                if item.card_path:
+                    send_text_with_markup(
+                        telegram_token, review_chat,
+                        f"VK-пост №{scheduled.post_id} запланирован на {due}. "
+                        "Прикрепите карточку к отложенной записи и подтвердите кнопкой.",
+                        photo_markup(item.id), client,
+                    )
+                else:
+                    store.confirm_photo(item.id)
+                    send_message(
+                        telegram_token, review_chat,
+                        f"VK-пост №{scheduled.post_id} запланирован на {due}. "
+                        "Это редакционный текст без товарной фотографии.",
+                        http=client,
+                    )
         elif scheduled.error:
             result["errors"].append(f"schedule {item.id}: {scheduled.error}")
 

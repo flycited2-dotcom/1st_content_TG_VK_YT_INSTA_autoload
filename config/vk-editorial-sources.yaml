@@ -1,0 +1,174 @@
+trusted_domains:
+  - daichi.ru
+  - breez.ru
+  - docs.breez.ru
+  - powerman.ru
+
+sources:
+  daikin_filter_guide:
+    title: Справочник пользователя Daikin FTXP/ATXP
+    publisher: Daichi
+    url: https://daichi.ru/upload/iblock/70d/svpyhnouu2e1raopap3im0mpyu4ize2m/FTXP20-35N.ATXP-N_User%20reference%20guide_4DRU520466-15K_Russian.pdf
+    type: official
+    checked_at: 2026-08-23
+  daichi_service_manual:
+    title: Руководство по монтажу и эксплуатации настенных кондиционеров
+    publisher: Daichi
+    url: https://daichi.ru/upload/iblock/f83/o5ivq3ljjhs8aamn37wj60569xeabt8w/IMmOM%20PRAW-TENA2_PRAW-TEDA2_DP22-03.01.01.pdf
+    type: official
+    checked_at: 2026-08-23
+  daichi_inverter_catalog:
+    title: Каталог бытовых кондиционеров 2026
+    publisher: Daichi
+    url: https://daichi.ru/upload/iblock/3d0/89yjsqkizhfwjx889xrt0xfuj64xe3bq/K1_%D0%91%D1%8B%D1%82%D0%BE%D0%B2%D1%8B%D0%B5%20%D0%BA%D0%BE%D0%BD%D0%B4%D0%B8%D1%86%D0%B8%D0%BE%D0%BD%D0%B5%D1%80%D1%8B_2026_DK26-02.01.04_190326_small.pdf
+    type: official
+    checked_at: 2026-08-23
+  daichi_multi:
+    title: Наружный блок мультисистемы Daichi DF-AM-R
+    publisher: Daichi
+    url: https://daichi.ru/catalog/multi-split-sistemy/naruzhnye-bloki/df-am-r/
+    type: official
+    checked_at: 2026-08-23
+  breez_zrp:
+    title: Пластинчатые рекуператоры серии ZRP
+    publisher: БРИЗ — Климатические системы
+    url: https://breez.ru/products/plastinchatie-rekuperatori-zrp/
+    type: supplier
+    checked_at: 2026-08-23
+  breez_support:
+    title: Техническая поддержка и подбор оборудования
+    publisher: БРИЗ — Климатические системы
+    url: https://breez.ru/services/tech-support/
+    type: supplier
+    checked_at: 2026-08-23
+  powerman_brick:
+    title: ИБП POWERMAN BRICK 600
+    publisher: POWERMAN
+    url: https://powerman.ru/brick_600/
+    type: manufacturer
+    checked_at: 2026-08-23
+  powerman_online:
+    title: ИБП POWERMAN ONLINE 1000 RT
+    publisher: POWERMAN
+    url: https://powerman.ru/online-1000-rt/
+    type: manufacturer
+    checked_at: 2026-08-23
+
+topics:
+  - id: clean-ac-filters
+    category: air_conditioners
+    content_type: useful
+    title: Как часто очищать фильтры кондиционера
+    intro: Простая профилактика помогает оборудованию работать в штатном режиме.
+    cta: Если обслуживание давно не проводилось, напишите нам — подскажем порядок действий.
+    facts:
+      - id: clean-every-two-weeks
+        text: В руководстве Daikin рекомендуется очищать воздушные фильтры раз в две недели.
+        source: daikin_filter_guide
+      - id: dry-in-shade
+        text: После промывки фильтры следует просушить в тени.
+        source: daikin_filter_guide
+  - id: end-of-season-ac
+    category: air_conditioners
+    content_type: service
+    title: Что сделать с кондиционером в конце сезона
+    intro: Короткий чек-лист из официального руководства по эксплуатации.
+    cta: Нужна диагностика или обслуживание — напишите в сообщения сообщества.
+    facts:
+      - id: wash-filters
+        text: В конце сезона руководство предписывает промыть или заменить фильтры.
+        source: daichi_service_manual
+      - id: dry-inside
+        text: Перед длительным перерывом внутреннюю часть рекомендуют просушить работой в режиме вентиляции.
+        source: daichi_service_manual
+  - id: inverter-benefits
+    category: air_conditioners
+    content_type: comparison
+    title: Инверторный или обычный кондиционер
+    intro: Главное различие — способ управления производительностью компрессора.
+    cta: Подберём решение под режим использования помещения и бюджет.
+    facts:
+      - id: inverter-precision
+        text: Инверторная технология повышает точность поддержания температуры.
+        source: daichi_inverter_catalog
+      - id: inverter-noise-energy
+        text: Официальный каталог связывает инверторное управление со снижением шума и расхода электроэнергии.
+        source: daichi_inverter_catalog
+  - id: multi-split-rooms
+    category: air_conditioners
+    content_type: comparison
+    title: Когда стоит рассмотреть мульти-сплит-систему
+    intro: Такой вариант применяют, когда климат нужен сразу в нескольких помещениях.
+    cta: Перед выбором посчитаем помещения и проверим возможную трассировку.
+    facts:
+      - id: one-outdoor-many-indoor
+        text: Мульти-сплит-система использует один наружный блок и несколько внутренних.
+        source: daichi_multi
+      - id: multi-zone
+        text: Daichi позиционирует такое решение для многокомнатных и многозонных помещений.
+        source: daichi_multi
+  - id: recuperator-purpose
+    category: recuperators
+    content_type: useful
+    title: Что делает рекуператор в системе вентиляции
+    intro: Рекуперация не заменяет воздухообмен, а дополняет его возвратом энергии.
+    cta: Для корректного подбора нужны параметры помещения и требуемый воздухообмен.
+    facts:
+      - id: heat-recovery
+        text: Пластинчатый рекуператор утилизирует тепло или холод в системе вентиляции.
+        source: breez_zrp
+      - id: streams-separated
+        text: В рекуператорах ZRP приточный и вытяжной воздушные потоки полностью разделены.
+        source: breez_zrp
+  - id: ventilation-selection
+    category: ventilation
+    content_type: useful
+    title: Почему вентиляцию нельзя подбирать только по площади
+    intro: Площадь важна, но инженерный подбор учитывает больше исходных данных.
+    cta: Пришлите планировку и задачу — сформируем исходные данные для подбора.
+    facts:
+      - id: operating-conditions
+        text: Технический подбор учитывает условия эксплуатации объекта.
+        source: breez_support
+      - id: price-requirements
+        text: При разработке решения также учитываются ценовые требования.
+        source: breez_support
+  - id: professional-selection
+    category: climate
+    content_type: trust
+    title: Что входит в профессиональный подбор климатической техники
+    intro: Хороший подбор начинается с задачи объекта, а не с названия модели.
+    cta: Опишите помещение и желаемый результат — предложим подходящие варианты.
+    facts:
+      - id: complex-solutions
+        text: Инженерная поддержка включает разработку комплексных решений для объектов.
+        source: breez_support
+      - id: non-standard
+        text: Официальная техническая поддержка отдельно учитывает сложные и нестандартные проекты.
+        source: breez_support
+  - id: ups-runtime
+    category: ups
+    content_type: useful
+    title: От чего зависит время работы ИБП
+    intro: Номинал батареи сам по себе не даёт универсального времени автономии.
+    cta: Для подбора пришлите список оборудования и его потребляемую мощность.
+    facts:
+      - id: runtime-load
+        text: POWERMAN указывает, что время автономной работы зависит от подключённой нагрузки.
+        source: powerman_brick
+      - id: protect-disturbances
+        text: ИБП BRICK рассчитан на работу при отключении сети и отклонениях сетевого напряжения.
+        source: powerman_brick
+  - id: online-ups
+    category: ups
+    content_type: comparison
+    title: Когда нужен ИБП класса Online
+    intro: Такой класс выбирают для оборудования с повышенными требованиями к качеству питания.
+    cta: Проверим тип нагрузки, мощность и требуемое время автономной работы.
+    facts:
+      - id: zero-transfer
+        text: Для POWERMAN ONLINE заявлено нулевое время перехода с сети на батарею.
+        source: powerman_online
+      - id: demanding-equipment
+        text: Серия ONLINE предназначена для серверов, автоматики и другого требовательного оборудования.
+        source: powerman_online

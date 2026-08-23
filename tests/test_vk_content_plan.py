@@ -1,4 +1,5 @@
 from datetime import datetime
+from pathlib import Path
 
 from content_factory.orchestrator.vk_content_plan import (
     VkContentPlanStore,
@@ -7,6 +8,7 @@ from content_factory.orchestrator.vk_content_plan import (
     classify_category,
     handle_plan_callback,
     materialize_plan,
+    materialize_editorial_plan,
     plan_slots,
 )
 
@@ -129,3 +131,25 @@ def test_approved_item_is_not_scheduled_more_than_day_early(tmp_path):
 
     approved = store.approved(int(now.timestamp()), lead_hours=24)
     assert [item.id for item in approved] == [first]
+
+
+def test_editorial_plan_rebalances_product_only_schedule(tmp_path):
+    store = VkContentPlanStore(tmp_path / "plan.db")
+    now = datetime(2026, 8, 24, 8, 0)
+    products = [candidate(str(index), "air_conditioners", f"BRAND{index}", index)
+                for index in range(20)]
+    materialize_plan(store, products, now, max_products=20)
+
+    store.rebalance_products(3, int(now.timestamp()))
+    knowledge = Path(__file__).parents[1] / "config" / "vk-editorial-sources.yaml"
+    added = materialize_editorial_plan(store, knowledge, now)
+    active = [item for item in store.list() if item.status in {
+        "planned", "review", "approved", "photo_pending", "photo_confirmed",
+    }]
+
+    assert len(added) == 9
+    assert len(active) == 12
+    assert sum(item.content_type == "product" for item in active) == 3
+    assert {item.content_type for item in active if item.content_type != "product"} == {
+        "useful", "service", "comparison", "trust",
+    }
