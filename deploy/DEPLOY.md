@@ -55,6 +55,24 @@ journalctl -u cf-scheduler.service -n 50 --no-pager
 - `cf-scheduler.timer` — каждые 5 мин: ловит дозревшие слоты, проводит конвейер.
 - `cf-bot.service` — long-poll бот (команды владельца, `/approve`).
 
+Для VK-плана сначала установить unit-файлы и выполнить один безопасный запуск без
+`VK_PLAN_PUBLISH`:
+
+```bash
+systemctl start cf-vk-plan.service
+journalctl -u cf-vk-plan.service -n 20 --no-pager
+```
+
+Только после чистого dry-run включить L1 отдельным drop-in и таймером:
+
+```bash
+mkdir -p /etc/systemd/system/cf-vk-plan.service.d
+install -m 0644 deploy/cf-vk-plan-live.conf \
+  /etc/systemd/system/cf-vk-plan.service.d/live.conf
+systemctl daemon-reload
+systemctl enable --now cf-vk-plan.timer
+```
+
 ## 6. Пилот (в БОЕВОЙ канал — только с confirm!)
 Отдельного тестового канала нет → пилотную задачу ставить **обязательно с `confirm`**:
 бот пришлёт владельцу превью каждого поста, публикация — по `/approve <key>`.
