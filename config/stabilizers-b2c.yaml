@@ -62,7 +62,8 @@ vk:
   token_env: VK_ACCESS_TOKEN
   redirect_uri: "https://climat-simf.ru/"
   token_store: "state/vk-tokens.json"
-  share_url: "https://climat-simf.ru/"
+  # Базовый путь отдельных Open Graph-страниц: VK берёт фото и описание именно оттуда.
+  share_url: "https://climat-simf.ru/share/vk"
   public_image_base_url: "https://splithome.ru/static/cf-cards"
   api_version: "5.199"
   dry_run: true

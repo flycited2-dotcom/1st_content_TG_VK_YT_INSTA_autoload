@@ -50,15 +50,43 @@ def build_vk_share_url(*, url: str, title: str, description: str,
     """Официальное окно ручной публикации VK без выдачи издательского токена."""
     if not url.startswith("https://"):
         raise ValueError("VK Share требует публичный HTTPS URL")
-    # description формирует описание ссылки, comment — текст в поле «Ваш комментарий».
-    # Передаём оба: разные версии VK Share обрабатывают их независимо.
-    params = {"url": url, "title": title, "description": description,
-              "comment": description}
+    # Карточку ссылки VK всегда собирает из Open Graph страницы `url`.
+    # Параметр `image` ненадёжен и может быть проигнорирован, поэтому изображение,
+    # заголовок и описание закрепляются на отдельной товарной share-странице.
+    params = {"url": url, "comment": description}
     if image_url:
         if not image_url.startswith("https://"):
             raise ValueError("Изображение VK Share должно иметь публичный HTTPS URL")
-        params["image"] = image_url
     return f"{VK_SHARE}?{urlencode(params)}"
+
+
+def build_stabilizer_vk_comment(message: str) -> str:
+    """Развернуть краткую карточку стабилизатора в читаемый продающий текст VK."""
+    source = adapt_vk_text(message)
+    lines = [line.strip() for line in source.splitlines() if line.strip()]
+    title = lines[0] if lines else "Стабилизатор напряжения"
+    price = next((line for line in lines if "₽" in line), "Цена по запросу")
+    return "\n".join([
+        f"⚡ {title}",
+        "",
+        price,
+        "",
+        "Почему стоит выбрать:",
+        "✅ Защищает технику при нестабильном напряжении",
+        "✅ Мощность 12 000 ВА",
+        "✅ Рабочий диапазон 130–270 В",
+        "✅ Настенное размещение — не занимает место на полу",
+        "✅ Цифровой контроль напряжения",
+        "✅ Гарантия производителя 36 месяцев",
+        "✅ Подберём мощность под вашу нагрузку",
+        "",
+        "🚚 Доставка по Крыму, Запорожской и Херсонской областям",
+        "💳 Оплата при получении после подтверждения заказа",
+        "📦 Наличие и срок поставки подтвердит менеджер",
+        "",
+        "📞 +7 978 579-29-95",
+        "Напишите или позвоните — подберём модель под параметры вашей сети.",
+    ])[:VK_MESSAGE_MAX].rstrip()
 
 
 @dataclass
