@@ -72,6 +72,8 @@ def classify_category(text: str) -> str:
     for category, terms in checks:
         if any(term in value for term in terms):
             return category
+    if "btu" in value and ("м²" in value or "м2" in value):
+        return "air_conditioners"
     return "climate"
 
 
@@ -163,6 +165,45 @@ class VkContentPlanStore:
             )
             return int(cursor.lastrowid) if cursor.rowcount else None
 
+    def synchronize_candidates(self, candidates: list[VkPlanCandidate]) -> dict[str, int]:
+        """Обновить ещё не отправленные позиции и снять исчезнувшие из наличия.
+
+        Если уже показанный или одобренный текст изменился, он возвращается на ревью:
+        владелец никогда не подтверждает одну цену, а публикует другую молча.
+        """
+        by_key = {candidate.source_key: candidate for candidate in candidates}
+        now = int(time.time())
+        changed = 0
+        blocked = 0
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT source_key,caption,card_path,status FROM vk_content_plan "
+                "WHERE status IN ('planned','review','approved')"
+            ).fetchall()
+            for source_key, caption, card_path, status in rows:
+                candidate = by_key.get(str(source_key))
+                if candidate is None:
+                    cursor = connection.execute(
+                        "UPDATE vk_content_plan SET status='blocked_unavailable',updated_at=? "
+                        "WHERE source_key=? AND status IN ('planned','review','approved')",
+                        (now, source_key),
+                    )
+                    blocked += int(cursor.rowcount)
+                    continue
+                content_changed = candidate.caption != caption or candidate.card_path != card_path
+                next_status = "planned" if content_changed and status != "planned" else status
+                cursor = connection.execute(
+                    "UPDATE vk_content_plan SET category=?,brand=?,caption=?,card_path=?,"
+                    "status=?,telegram_message_id=CASE WHEN ?='planned' AND status!='planned' "
+                    "THEN NULL ELSE telegram_message_id END,updated_at=? WHERE source_key=?",
+                    (candidate.category, candidate.brand, candidate.caption, candidate.card_path,
+                     next_status, next_status, now, source_key),
+                )
+                changed += int(cursor.rowcount and (
+                    content_changed or candidate.category != classify_category(caption)
+                ))
+        return {"changed": changed, "blocked": blocked}
+
     def list(self) -> list[VkPlanItem]:
         with self._connect() as connection:
             rows = connection.execute(
@@ -224,8 +265,11 @@ class VkContentPlanStore:
         return [item for item in self.list()
                 if item.status == "planned" and int(now) < item.due_at <= upper][:limit]
 
-    def approved(self) -> list[VkPlanItem]:
-        return [item for item in self.list() if item.status == "approved"]
+    def approved(self, now: int | None = None, lead_hours: int = 24) -> list[VkPlanItem]:
+        upper = None if now is None else int(now) + int(lead_hours) * 3600
+        return [item for item in self.list()
+                if item.status == "approved"
+                and (upper is None or int(now) < item.due_at <= upper)]
 
     def reminders(self, now: int, hours_before: int = 3) -> list[VkPlanItem]:
         upper = int(now) + int(hours_before) * 3600
@@ -281,6 +325,7 @@ def load_candidates(source_db: str | Path, live_captions: dict[str, str]) -> lis
 
 def materialize_plan(store: VkContentPlanStore, candidates: list[VkPlanCandidate],
                      now: datetime, horizon_days: int = 14) -> list[int]:
+    store.synchronize_candidates(candidates)
     slots = plan_slots(now, horizon_days=horizon_days)
     occupied = {item.due_at for item in store.list() if item.status in ACTIVE_STATUSES}
     free_slots = [slot for slot in slots if slot not in occupied]
@@ -343,7 +388,7 @@ def run_cycle(*, store: VkContentPlanStore, source_db: str, telegram_token: str,
             result["errors"].append(f"review {item.id}: {preview.error or 'state conflict'}")
 
     publisher = VkPublisher(vk_token, owner_id, dry_run=dry_run, http=client)
-    for item in store.approved():
+    for item in store.approved(int(now.timestamp())):
         scheduled = publisher.publish_text(item.caption, publish_at=item.due_at)
         if scheduled.ok and scheduled.post_id is not None and not scheduled.dry_run:
             if store.mark_scheduled(item.id, scheduled.post_id):

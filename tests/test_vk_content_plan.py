@@ -39,6 +39,7 @@ def test_classify_category_covers_current_store_assortment():
     assert classify_category("Приточно-вытяжная вентиляция") == "ventilation"
     assert classify_category("Тепловой насос Daichi") == "heat_pumps"
     assert classify_category("Настенная сплит-система") == "air_conditioners"
+    assert classify_category("Daichi Эйр 2 · 9000 BTU · до 25 м²") == "air_conditioners"
 
 
 def test_choose_candidates_avoids_same_category_and_brand_when_possible():
@@ -93,3 +94,38 @@ def test_review_and_photo_reminder_windows(tmp_path):
     assert store.mark_reminded(first)
     assert store.reminders(due - 60) == []
     assert store.get(second).status == "planned"
+
+
+def test_catalog_change_forces_fresh_review_and_missing_item_is_blocked(tmp_path):
+    store = VkContentPlanStore(tmp_path / "plan.db")
+    now = datetime(2026, 8, 24, 8, 0)
+    first, second = materialize_plan(store, [
+        candidate("one", "stabilizers", "RUCELF", 2),
+        candidate("two", "ups", "POWERMAN", 1),
+    ], now)
+    assert store.mark_review(first, 100)
+    assert store.approve(first)
+
+    fresh = candidate("one", "stabilizers", "RUCELF", 2)
+    fresh = VkPlanCandidate(**{**fresh.__dict__, "caption": "RUCELF one\nНовая цена"})
+    result = store.synchronize_candidates([fresh])
+
+    assert result == {"changed": 1, "blocked": 1}
+    assert store.get(first).status == "planned"
+    assert store.get(first).telegram_message_id is None
+    assert "Новая цена" in store.get(first).caption
+    assert store.get(second).status == "blocked_unavailable"
+
+
+def test_approved_item_is_not_scheduled_more_than_day_early(tmp_path):
+    store = VkContentPlanStore(tmp_path / "plan.db")
+    now = datetime(2026, 8, 24, 8, 0)
+    first, second = materialize_plan(store, [
+        candidate("one", "stabilizers", "RUCELF", 2),
+        candidate("two", "ups", "POWERMAN", 1),
+    ], now)
+    assert store.mark_review(first, 100) and store.approve(first)
+    assert store.mark_review(second, 101) and store.approve(second)
+
+    approved = store.approved(int(now.timestamp()), lead_hours=24)
+    assert [item.id for item in approved] == [first]
