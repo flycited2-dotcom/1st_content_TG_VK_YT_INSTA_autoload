@@ -50,7 +50,10 @@ def build_vk_share_url(*, url: str, title: str, description: str,
     """Официальное окно ручной публикации VK без выдачи издательского токена."""
     if not url.startswith("https://"):
         raise ValueError("VK Share требует публичный HTTPS URL")
-    params = {"url": url, "title": title, "description": description}
+    # description формирует описание ссылки, comment — текст в поле «Ваш комментарий».
+    # Передаём оба: разные версии VK Share обрабатывают их независимо.
+    params = {"url": url, "title": title, "description": description,
+              "comment": description}
     if image_url:
         if not image_url.startswith("https://"):
             raise ValueError("Изображение VK Share должно иметь публичный HTTPS URL")

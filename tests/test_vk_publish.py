@@ -39,6 +39,7 @@ def test_vk_share_url_contains_public_page_and_image():
     assert share.startswith("https://vk.com/share.php?")
     assert query["url"] == ["https://climat-simf.ru/"]
     assert query["image"] == ["https://splithome.ru/static/cf-cards/item.png"]
+    assert query["comment"] == ["Цена 22 900 ₽"]
 
 
 def test_vk_publish_uploads_photo_then_posts_wall(tmp_path):
