@@ -18,9 +18,10 @@ import httpx
 
 VK_ID_AUTHORIZE = "https://id.vk.ru/authorize"
 VK_ID_TOKEN = "https://id.vk.ru/oauth2/auth"
-# VK ID — контур входа, а не старый VK API publisher. При запросе wall/photos
-# кабинет всё равно выдаёт только vkid.personal_info/offline.
-DEFAULT_SCOPES = ("vkid.personal_info", "offline")
+# Новые пользовательские Access token выдаются через OAuth VK ID. Права VK API
+# запрашиваются в том же PKCE-потоке; VK может отфильтровать расширенные права,
+# если они ещё не согласованы для приложения.
+DEFAULT_SCOPES = ("vkid.personal_info", "offline", "wall", "photos", "groups")
 
 
 def _b64url(data: bytes) -> str:

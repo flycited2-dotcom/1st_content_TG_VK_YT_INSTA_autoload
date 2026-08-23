@@ -18,7 +18,7 @@ def test_begin_builds_pkce_authorization_url():
     query = parse_qs(urlparse(url).query)
     assert query["client_id"] == ["54732587"]
     assert query["redirect_uri"] == ["https://climat-simf.ru/"]
-    assert query["scope"] == ["vkid.personal_info offline"]
+    assert query["scope"] == ["vkid.personal_info offline wall photos groups"]
     assert query["state"] == [pending.state]
     assert query["code_challenge"] == [code_challenge(pending.code_verifier)]
     assert len(pending.code_verifier) >= 43
