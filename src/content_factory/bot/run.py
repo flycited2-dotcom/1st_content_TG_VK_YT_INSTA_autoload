@@ -20,6 +20,10 @@ from content_factory.publish.orders import OrderLinks, order_markup
 from content_factory.bot.order_dialog import OrderDialogStore
 from content_factory.bot.order_flow import make_order_flow
 from content_factory.orchestrator.queue import TaskQueue
+from content_factory.orchestrator.vk_content_plan import (
+    VkContentPlanStore,
+    handle_plan_callback,
+)
 from content_factory.orchestrator.confirm_store import ConfirmStore
 from content_factory.bot.commands import handle_command, handle_callback
 from content_factory.bot.manual_photo import make_manual_photo_fn
@@ -679,6 +683,18 @@ def main():
                     _send_force_reply(owner or chat_p,
                                       f"💰 Новая цена для «{key_p[:50]}»? Только число.",
                                       "напр.: 25990")
+                    continue
+                if data_cq.startswith("vkp:"):
+                    plan_store = VkContentPlanStore(os.getenv(
+                        "VK_PLAN_STATE_DB", "/opt/content-factory-vk/state/vk-plan.db"
+                    ))
+                    reply = handle_plan_callback(data_cq, plan_store)
+                    try:
+                        http.post(f"{TG_API}/bot{token}/answerCallbackQuery",
+                                  data={"callback_query_id": cq.get("id"), "text": reply[:180]})
+                    except httpx.HTTPError:
+                        pass
+                    finalize_preview(http, token, cq, reply)
                     continue
                 if data_cq.startswith("excancel:"):    # отмена задач excel-конвейера
                     target = data_cq.split(":", 1)[1]

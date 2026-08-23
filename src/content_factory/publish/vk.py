@@ -166,7 +166,7 @@ class VkPublisher:
                 httpx.HTTPError) as exc:
             return VkPublishResult(ok=False, error=str(exc), payload=preview)
 
-    def publish_text(self, caption: str) -> VkPublishResult:
+    def publish_text(self, caption: str, *, publish_at: int | None = None) -> VkPublishResult:
         """Явно опубликовать текст без вложения для переходного ручного фотопотока.
 
         Этот метод отделён от ``publish`` намеренно: штатная публикация карточки не
@@ -179,16 +179,21 @@ class VkPublisher:
             "message": adapt_vk_text(caption),
             "manual_photo_required": True,
         }
+        if publish_at is not None:
+            payload["publish_date"] = int(publish_at)
         if self.dry_run:
             return VkPublishResult(ok=True, dry_run=True, payload=payload)
         if not self.token:
             return VkPublishResult(ok=False, error="VK_ACCESS_TOKEN не задан", payload=payload)
         try:
-            post = self._api("wall.post", {
+            post_data = {
                 "owner_id": payload["owner_id"],
                 "from_group": payload["from_group"],
                 "message": payload["message"],
-            })
+            }
+            if publish_at is not None:
+                post_data["publish_date"] = int(publish_at)
+            post = self._api("wall.post", post_data)
             return VkPublishResult(ok=True, post_id=int(post["post_id"]), payload=payload)
         except (KeyError, ValueError, RuntimeError, httpx.HTTPError) as exc:
             return VkPublishResult(ok=False, error=str(exc), payload=payload)

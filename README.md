@@ -111,3 +111,24 @@ python -m content_factory.publish.vk_text_sync --publish
 Прод-таймер `cf-vk-text.timer` запускает мост раз в сутки в 10:15 с небольшим случайным
 смещением. Источник `/opt/content-factory/state/content_factory.db` открывается только для
 чтения; состояние VK хранится отдельно в `/opt/content-factory-vk/state/vk-sync.db`.
+
+### VK Content Planner v1
+
+Планировщик `content_factory.orchestrator.vk_content_plan` формирует очередь на 14 дней
+(понедельник–суббота, один пост в день), чередует категории и бренды и использует только
+уже прошедшие Telegram-review материалы с повторно проверенной ценой и наличием. Состояние
+хранится в `/opt/content-factory-vk/state/vk-plan.db`.
+
+```bash
+# dry-run: сформировать план, но ничего не отправлять
+python -m content_factory.orchestrator.vk_content_plan
+
+# L1: отправлять по одному материалу на ревью и после одобрения создавать отложенный текст
+VK_PLAN_PUBLISH=1 python -m content_factory.orchestrator.vk_content_plan
+```
+
+В Telegram владелец нажимает «Одобрить для VK» или «Пропустить». После одобрения завод
+создаёт отложенную текстовую запись и просит вручную прикрепить готовую карточку. За три
+часа до выхода неподтверждённого фото приходит повторное предупреждение. Повторные запуски
+идемпотентны и не создают второй материал из того же источника. `cf-vk-plan.timer` запускает
+цикл каждые 30 минут; без `VK_PLAN_PUBLISH=1` он остаётся безопасным dry-run.
