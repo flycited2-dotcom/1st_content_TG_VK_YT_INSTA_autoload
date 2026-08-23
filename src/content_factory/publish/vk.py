@@ -107,9 +107,12 @@ class VkPublisher:
         self.dry_run = dry_run
         self.http = http or httpx.Client(timeout=60, follow_redirects=True)
 
-    def preview(self, image: str, caption: str) -> dict:
-        return {"owner_id": self.owner_id, "message": adapt_vk_text(caption),
-                "image": str(image), "dry_run": self.dry_run}
+    def preview(self, image: str, caption: str, *, publish_at: int | None = None) -> dict:
+        payload = {"owner_id": self.owner_id, "message": adapt_vk_text(caption),
+                   "image": str(image), "dry_run": self.dry_run}
+        if publish_at is not None:
+            payload["publish_date"] = int(publish_at)
+        return payload
 
     def _api(self, method: str, data: dict) -> dict:
         payload = {**data, "access_token": self.token, "v": self.api_version}
@@ -121,8 +124,16 @@ class VkPublisher:
             raise RuntimeError(f"VK {err.get('error_code')}: {err.get('error_msg')}")
         return body.get("response")
 
-    def publish(self, image: str, caption: str) -> VkPublishResult:
-        preview = self.preview(image, caption)
+    def publish(self, image: str, caption: str,
+                *, publish_at: int | None = None) -> VkPublishResult:
+        """Опубликовать карточку нативной фотографией.
+
+        Отрицательный ``owner_id`` обозначает стену сообщества, а не тип токена.
+        Поэтому право загрузки проверяет сам VK API: пользовательский токен
+        администратора сможет загрузить фото в сообщество, ключ сообщества вернёт
+        ошибку, и запись без изображения создана не будет.
+        """
+        preview = self.preview(image, caption, publish_at=publish_at)
         if self.dry_run:
             return VkPublishResult(ok=True, dry_run=True, payload=preview)
         if not self.token:
@@ -131,25 +142,17 @@ class VkPublisher:
         if not path.is_file():
             return VkPublishResult(ok=False, error=f"файл карточки не найден: {path}",
                                    payload=preview)
-        if self.owner_id < 0:
-            return VkPublishResult(
-                ok=False,
-                error=(
-                    "Ключ сообщества VK не поддерживает загрузку нативной фотографии "
-                    "на стену: photos.getWallUploadServer требует пользовательский токен. "
-                    "Публикация остановлена, чтобы не создать пост без изображения."
-                ),
-                payload=preview,
-            )
         try:
-            upload = self._api("photos.getWallUploadServer", {})
+            target = ({"group_id": abs(self.owner_id)}
+                      if self.owner_id < 0 else {"user_id": self.owner_id})
+            upload = self._api("photos.getWallUploadServer", target)
             with path.open("rb") as fh:
                 upload_response = self.http.post(
                     upload["upload_url"], files={"photo": (path.name, fh.read(), "image/png")})
             upload_response.raise_for_status()
             uploaded = upload_response.json()
             save_params = {k: uploaded[k] for k in ("server", "photo", "hash")}
-            save_params["user_id"] = abs(self.owner_id)
+            save_params.update(target)
             saved = self._api("photos.saveWallPhoto", save_params)
             photo = saved[0]
             attachment = f"photo{photo['owner_id']}_{photo['id']}"
@@ -157,9 +160,10 @@ class VkPublisher:
                 attachment += f"_{photo['access_key']}"
             post = self._api("wall.post", {
                 "owner_id": self.owner_id,
-                "from_group": 0,
+                "from_group": 1 if self.owner_id < 0 else 0,
                 "message": preview["message"],
                 "attachments": attachment,
+                **({"publish_date": int(publish_at)} if publish_at is not None else {}),
             })
             return VkPublishResult(ok=True, post_id=int(post["post_id"]), payload=preview)
         except (OSError, KeyError, IndexError, ValueError, RuntimeError,

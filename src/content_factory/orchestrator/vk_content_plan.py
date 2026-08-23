@@ -410,7 +410,8 @@ def send_text_with_markup(token: str, chat_id: str, text: str, markup: str,
 def run_cycle(*, store: VkContentPlanStore, source_db: str, telegram_token: str,
               review_chat: str, vk_token: str, owner_id: int, now: datetime,
               dry_run: bool = True, http: httpx.Client | None = None,
-              editorial_knowledge: str | Path = "config/vk-editorial-sources.yaml") -> dict:
+              editorial_knowledge: str | Path = "config/vk-editorial-sources.yaml",
+              native_photo_enabled: bool = False) -> dict:
     client = http or httpx.Client(timeout=60)
     result = {"planned": [], "reviewed": [], "scheduled": [], "reminded": [], "errors": []}
 
@@ -449,12 +450,24 @@ def run_cycle(*, store: VkContentPlanStore, source_db: str, telegram_token: str,
 
     publisher = VkPublisher(vk_token, owner_id, dry_run=dry_run, http=client)
     for item in store.approved(int(now.timestamp())):
-        scheduled = publisher.publish_text(item.caption, publish_at=item.due_at)
+        native_photo = bool(native_photo_enabled and item.card_path)
+        scheduled = (
+            publisher.publish(item.card_path, item.caption, publish_at=item.due_at)
+            if native_photo else
+            publisher.publish_text(item.caption, publish_at=item.due_at)
+        )
         if scheduled.ok and scheduled.post_id is not None and not scheduled.dry_run:
             if store.mark_scheduled(item.id, scheduled.post_id):
                 result["scheduled"].append(item.id)
                 due = datetime.fromtimestamp(item.due_at).strftime("%d.%m %H:%M")
-                if item.card_path:
+                if native_photo:
+                    store.confirm_photo(item.id)
+                    send_message(
+                        telegram_token, review_chat,
+                        f"VK-пост №{scheduled.post_id} с нативной фотографией запланирован на {due}.",
+                        http=client,
+                    )
+                elif item.card_path:
                     send_text_with_markup(
                         telegram_token, review_chat,
                         f"VK-пост №{scheduled.post_id} запланирован на {due}. "
@@ -502,6 +515,7 @@ def main(argv: list[str] | None = None) -> int:
         review_chat=config("TELEGRAM_REVIEW_CHANNEL_ID", default=""),
         vk_token=config("VK_ACCESS_TOKEN", default=""), owner_id=args.owner_id,
         now=datetime.now(), dry_run=not publish_enabled,
+        native_photo_enabled=os.getenv("VK_NATIVE_PHOTO_ENABLED", "0") == "1",
     )
     print(json.dumps(result, ensure_ascii=False))
     return 1 if result["errors"] else 0

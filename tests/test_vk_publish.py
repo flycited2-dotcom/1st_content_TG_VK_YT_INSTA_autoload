@@ -86,18 +86,50 @@ def test_vk_publish_uploads_photo_then_posts_wall(tmp_path):
                      "/method/photos.saveWallPhoto", "/method/wall.post"]
 
 
-def test_vk_group_publish_stops_before_creating_text_only_post(tmp_path):
+def test_vk_group_wall_uses_group_target_and_stops_if_token_cannot_upload(tmp_path):
     card = tmp_path / "card.png"
     card.write_bytes(b"PNG")
     def handler(request):
-        raise AssertionError("Для ключа сообщества сетевых запросов быть не должно")
+        assert request.url.path.endswith("photos.getWallUploadServer")
+        form = {k: v[0] for k, v in parse_qs(request.content.decode()).items()}
+        assert form["group_id"] == "241020718"
+        return httpx.Response(200, json={"error": {
+            "error_code": 27, "error_msg": "Group authorization failed",
+        }})
 
     http = httpx.Client(transport=httpx.MockTransport(handler))
     result = VkPublisher("GROUP_TOKEN", -241020718, dry_run=False, http=http).publish(
         card, "Пост сообщества")
     assert not result.ok
     assert result.post_id is None
-    assert "не создать пост без изображения" in result.error
+    assert "VK 27" in result.error
+
+
+def test_vk_user_token_uploads_to_group_and_schedules_from_group(tmp_path):
+    card = tmp_path / "card.png"
+    card.write_bytes(b"PNG")
+
+    def handler(request):
+        form = {k: v[0] for k, v in parse_qs(request.content.decode()).items()}
+        if request.url.path.endswith("photos.getWallUploadServer"):
+            assert form["group_id"] == "241020718"
+            return httpx.Response(200, json={"response": {"upload_url": "https://upload.vk.test/u"}})
+        if request.url.host == "upload.vk.test":
+            return httpx.Response(200, json={"server": 1, "photo": "[]", "hash": "h"})
+        if request.url.path.endswith("photos.saveWallPhoto"):
+            assert form["group_id"] == "241020718"
+            return httpx.Response(200, json={"response": [{"owner_id": -241020718, "id": 77}]})
+        if request.url.path.endswith("wall.post"):
+            assert form["owner_id"] == "-241020718"
+            assert form["from_group"] == "1"
+            assert form["publish_date"] == "1787657400"
+            return httpx.Response(200, json={"response": {"post_id": 88}})
+        raise AssertionError(request.url)
+
+    http = httpx.Client(transport=httpx.MockTransport(handler))
+    result = VkPublisher("USER_TOKEN", -241020718, dry_run=False, http=http).publish(
+        card, "Пост", publish_at=1787657400)
+    assert result.ok and result.post_id == 88
 
 
 def test_vk_group_can_explicitly_publish_text_for_manual_photo_flow():
