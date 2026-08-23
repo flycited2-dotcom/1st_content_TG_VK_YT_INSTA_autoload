@@ -47,16 +47,12 @@ def test_load_config_parses_modes_by_category(tmp_path):
     assert cfg.cards_modes_by_category == {2: "mcp", 7: "kbt"}
 
 
-def test_load_config_parses_exact_product_layer(tmp_path):
+def test_load_config_parses_product_reference_search(tmp_path):
     cfg = load_config(_write_cfg(tmp_path,
         "source: {}\n"
         "cards:\n"
-        "  product_layer_mode: exact_source\n"
-        "  template_path: assets/card.png\n"
         "  reference_dir: state/references\n"
         "  trusted_image_domains: [vendor.test]\n"))
-    assert cfg.cards.product_layer_mode == "exact_source"
-    assert cfg.cards.template_path == "assets/card.png"
     assert cfg.cards.reference_dir == "state/references"
     assert cfg.cards.trusted_image_domains == ["vendor.test"]
 

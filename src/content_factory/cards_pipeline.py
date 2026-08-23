@@ -160,8 +160,7 @@ def _http_get(url: str) -> bytes:
 
 def run_once(groups, cfg: FotogenConfig, store: CardJobStore,
              http: httpx.Client | None = None, fetch_photo=None,
-             specs_fn=None, reference_lookup=None, missing_photo=None,
-             exact_compose_fn=None) -> tuple[int, int]:
+             specs_fn=None, reference_lookup=None, missing_photo=None) -> tuple[int, int]:
     """Один проход. Возвращает (submitted, published).
     specs_fn(group) -> текст ТТХ для агента (если задан) — иначе specs_text(rep.attrs).
     Через specs_fn отдаём агенту те же «ключевые особенности», что и в подписи."""
@@ -222,15 +221,6 @@ def run_once(groups, cfg: FotogenConfig, store: CardJobStore,
             continue
         mode = (cfg.modes or {}).get(getattr(g, "key", None)) or cfg.mode
         specs = specs_fn(g) if specs_fn else specs_text(rep.attrs)
-        if mode == "exact" and exact_compose_fn:
-            try:
-                exact_compose_fn(g, fetch_photo(photo_url), cards / f"{key}.jpg")
-            except Exception:
-                continue
-            store.record(key, "exact-source", "done", tries=next_tries)
-            submitted += 1
-            published += 1
-            continue
         try:
             in_fn = submit_card_job(cfg, fetch_photo(photo_url), g.brand, g.series,
                                     specs, http=http, mode=mode)

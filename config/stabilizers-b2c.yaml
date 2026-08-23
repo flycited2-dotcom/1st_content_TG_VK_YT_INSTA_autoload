@@ -28,12 +28,10 @@ content:
 cards:
   dir: "state/stabilizers/cards"
   base_url: ""
-  # exact = товар не перерисовывается: исходная фотография вставляется отдельным слоем.
-  default_mode: exact
+  # kbt = премиальная карточка по эталонам; исходное фото задаёт геометрию товара.
+  default_mode: kbt
   require_for_publish: true
-  modes_by_category: {10598: exact}
-  product_layer_mode: exact_source
-  template_path: "assets/card-templates/stabilizer-exact-black-gold-v1.png"
+  modes_by_category: {10598: kbt}
   reference_dir: "state/stabilizer-product-references"
   trusted_image_domains:
     - "rucelf.com"

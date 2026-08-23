@@ -19,7 +19,6 @@ from content_factory.cards_pipeline import FotogenConfig, CardJobStore, run_once
 from content_factory.content.cards import build_modes_map
 from content_factory.content.specs import build_specs_for_card
 from content_factory.ingest.breez import fetch_breez_utp_by_nc, live_base_lookup
-from content_factory.content.exact_card import card_spec_for_offer, compose_exact_product_card
 from content_factory.ingest.product_references import ProductReferenceInbox
 
 
@@ -70,27 +69,10 @@ def main():
 
     refs = ProductReferenceInbox(cfg.cards.reference_dir, cfg.cards.trusted_image_domains)
 
-    def exact_compose(g, photo_bytes, output_path):
-        if cfg.cards.product_layer_mode != "exact_source":
-            raise ValueError("mode=exact требует cards.product_layer_mode=exact_source")
-        if not cfg.cards.template_path:
-            raise ValueError("mode=exact требует cards.template_path")
-        manifest = compose_exact_product_card(
-            photo_bytes, cfg.cards.template_path, output_path,
-            card_spec_for_offer(g.representative),
-        )
-        manifest.update({"supplier_sku": g.representative.supplier_sku,
-                         "product_model": g.representative.model,
-                         "source_policy": "catalog-first; verified exact-model web fallback"})
-        Path(output_path).with_suffix(".provenance.json").write_text(
-            json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
-        return manifest
-
     submitted, published = run_once(
         groups, fcfg, store, specs_fn=specs_fn,
         reference_lookup=lambda g: refs.resolve(g.representative),
         missing_photo=lambda g: refs.queue(g.representative),
-        exact_compose_fn=exact_compose,
     )
     print(f"cards: series={len(groups)} submitted={submitted} published={published}")
 
