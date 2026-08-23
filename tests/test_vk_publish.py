@@ -86,35 +86,18 @@ def test_vk_publish_uploads_photo_then_posts_wall(tmp_path):
                      "/method/photos.saveWallPhoto", "/method/wall.post"]
 
 
-def test_vk_group_publish_uses_message_photo_with_access_key(tmp_path):
+def test_vk_group_publish_stops_before_creating_text_only_post(tmp_path):
     card = tmp_path / "card.png"
     card.write_bytes(b"PNG")
-    calls = []
-
     def handler(request):
-        calls.append(request.url.path)
-        if request.url.path.endswith("photos.getMessagesUploadServer"):
-            return httpx.Response(200, json={"response": {
-                "upload_url": "https://upload.vk.test/messages"}})
-        if request.url.host == "upload.vk.test":
-            return httpx.Response(200, json={"server": 2, "photo": "[]", "hash": "mh"})
-        if request.url.path.endswith("photos.saveMessagesPhoto"):
-            return httpx.Response(200, json={"response": [{
-                "owner_id": -241020718, "id": 456239020, "access_key": "private"}]})
-        if request.url.path.endswith("wall.post"):
-            form = {k: v[0] for k, v in parse_qs(request.content.decode()).items()}
-            assert form["owner_id"] == "-241020718"
-            assert form["from_group"] == "1"
-            assert form["attachments"] == "photo-241020718_456239020_private"
-            return httpx.Response(200, json={"response": {"post_id": 1}})
-        raise AssertionError(request.url)
+        raise AssertionError("Для ключа сообщества сетевых запросов быть не должно")
 
     http = httpx.Client(transport=httpx.MockTransport(handler))
     result = VkPublisher("GROUP_TOKEN", -241020718, dry_run=False, http=http).publish(
         card, "Пост сообщества")
-    assert result.ok and result.post_id == 1
-    assert calls == ["/method/photos.getMessagesUploadServer", "/messages",
-                     "/method/photos.saveMessagesPhoto", "/method/wall.post"]
+    assert not result.ok
+    assert result.post_id is None
+    assert "не создать пост без изображения" in result.error
 
 
 def test_build_vk_preview_from_review_record(tmp_path):
