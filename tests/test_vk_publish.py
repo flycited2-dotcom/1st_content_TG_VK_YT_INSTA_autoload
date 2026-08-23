@@ -100,6 +100,26 @@ def test_vk_group_publish_stops_before_creating_text_only_post(tmp_path):
     assert "не создать пост без изображения" in result.error
 
 
+def test_vk_group_can_explicitly_publish_text_for_manual_photo_flow():
+    def handler(request):
+        assert request.url.path.endswith("wall.post")
+        form = {k: v[0] for k, v in parse_qs(request.content.decode()).items()}
+        assert form == {
+            "owner_id": "-241020718",
+            "from_group": "1",
+            "message": "Товар\n\nЦена 20 000 ₽",
+            "access_token": "GROUP_TOKEN",
+            "v": "5.199",
+        }
+        return httpx.Response(200, json={"response": {"post_id": 9}})
+
+    http = httpx.Client(transport=httpx.MockTransport(handler))
+    result = VkPublisher("GROUP_TOKEN", -241020718, dry_run=False, http=http).publish_text(
+        "Товар\n<blockquote>Цена <b>20 000 ₽</b></blockquote>")
+    assert result.ok and result.post_id == 9
+    assert result.payload["manual_photo_required"] is True
+
+
 def test_build_vk_preview_from_review_record(tmp_path):
     config_path = tmp_path / "config.yaml"
     config_path.write_text(

@@ -165,3 +165,30 @@ class VkPublisher:
         except (OSError, KeyError, IndexError, ValueError, RuntimeError,
                 httpx.HTTPError) as exc:
             return VkPublishResult(ok=False, error=str(exc), payload=preview)
+
+    def publish_text(self, caption: str) -> VkPublishResult:
+        """Явно опубликовать текст без вложения для переходного ручного фотопотока.
+
+        Этот метод отделён от ``publish`` намеренно: штатная публикация карточки не
+        должна молча терять изображение, а текстовый пост помечается как требующий
+        последующего ручного прикрепления готовой карточки.
+        """
+        payload = {
+            "owner_id": self.owner_id,
+            "from_group": 1 if self.owner_id < 0 else 0,
+            "message": adapt_vk_text(caption),
+            "manual_photo_required": True,
+        }
+        if self.dry_run:
+            return VkPublishResult(ok=True, dry_run=True, payload=payload)
+        if not self.token:
+            return VkPublishResult(ok=False, error="VK_ACCESS_TOKEN не задан", payload=payload)
+        try:
+            post = self._api("wall.post", {
+                "owner_id": payload["owner_id"],
+                "from_group": payload["from_group"],
+                "message": payload["message"],
+            })
+            return VkPublishResult(ok=True, post_id=int(post["post_id"]), payload=payload)
+        except (KeyError, ValueError, RuntimeError, httpx.HTTPError) as exc:
+            return VkPublishResult(ok=False, error=str(exc), payload=payload)
