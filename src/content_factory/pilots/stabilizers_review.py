@@ -89,7 +89,8 @@ def run_pilot(cfg, *, catalog_token: str, telegram_token: str, review_chat: str,
               publish_channel: str, state_db: Path, media_dir: Path, count: int = 3,
               http: httpx.Client | None = None, dry_run: bool = False,
               creative_dir: Path | None = None, refresh_existing: bool = False,
-              retire_message_ids: tuple[int, ...] = ()) -> dict:
+              retire_message_ids: tuple[int, ...] = (),
+              sku_filter: tuple[str, ...] = ()) -> dict:
     if not dry_run and not all((telegram_token.strip(), review_chat.strip(), publish_channel.strip())):
         raise ValueError("Не заданы Telegram token/review chat/publish channel")
     owns_client = http is None
@@ -101,7 +102,12 @@ def run_pilot(cfg, *, catalog_token: str, telegram_token: str, review_chat: str,
                "retired": [], "errors": []}
     try:
         offers = collect_storefront_offers(cfg.source, catalog_token, client=client)
-        selected = select_pilot_offers(offers, count=count)
+        if sku_filter:
+            wanted = set(sku_filter)
+            selected = [offer for offer in offers if offer.supplier_sku in wanted]
+            selected.sort(key=lambda offer: sku_filter.index(offer.supplier_sku))
+        else:
+            selected = select_pilot_offers(offers, count=count)
         summary["selected"] = len(selected)
         if len(selected) < count:
             raise RuntimeError(f"Для пилота найдено только {len(selected)} подходящих товаров")
@@ -197,6 +203,8 @@ def main(argv=None):
     parser.add_argument("--creative-dir")
     parser.add_argument("--refresh-existing", action="store_true")
     parser.add_argument("--retire-review-message", type=int, action="append", default=[])
+    parser.add_argument("--sku", action="append", default=[],
+                        help="Отправить только указанный supplier_sku (можно повторять)")
     args = parser.parse_args(argv)
     cfg = load_config(args.config)
     catalog_env = _env(args.catalog_env)
@@ -214,6 +222,7 @@ def main(argv=None):
         creative_dir=Path(args.creative_dir) if args.creative_dir else None,
         refresh_existing=args.refresh_existing,
         retire_message_ids=tuple(args.retire_review_message),
+        sku_filter=tuple(args.sku),
     )
     print(json.dumps(result, ensure_ascii=False))
     completed = len(result["prepared"]) + len(result["sent"]) + len(result["skipped"])

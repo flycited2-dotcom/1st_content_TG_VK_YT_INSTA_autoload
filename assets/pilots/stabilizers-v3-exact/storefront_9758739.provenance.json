@@ -1,0 +1,16 @@
+{
+  "supplier_sku": "storefront:9758739",
+  "brand": "RUCELF",
+  "exact_model": "SRW-12000-D",
+  "source_path": "state/stabilizer-pilot-media/storefront_9758739.jpg",
+  "source_sha256": "350a8f428f666257cf5616df13b2a5ed99a9e213029afd7af6b20a85b57a4c35",
+  "source_size": [499, 800],
+  "placed_size": [368, 590],
+  "scale_x": 0.7374749498997996,
+  "scale_y": 0.7375,
+  "geometry_preserved": true,
+  "aspect_ratio_error": 0.00002118644067794495,
+  "rotation_degrees": 0,
+  "perspective_transform": false,
+  "source_policy": "catalog-first; verified exact-model web fallback"
+}

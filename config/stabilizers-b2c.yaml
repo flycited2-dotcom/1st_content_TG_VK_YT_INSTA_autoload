@@ -28,9 +28,19 @@ content:
 cards:
   dir: "state/stabilizers/cards"
   base_url: ""
-  default_mode: kbt
+  # exact = товар не перерисовывается: исходная фотография вставляется отдельным слоем.
+  default_mode: exact
   require_for_publish: true
-  modes_by_category: {10598: kbt}
+  modes_by_category: {10598: exact}
+  product_layer_mode: exact_source
+  template_path: "assets/card-templates/stabilizer-exact-black-gold-v1.png"
+  reference_dir: "state/stabilizer-product-references"
+  trusted_image_domains:
+    - "rucelf.com"
+    - "rucelf.ru"
+    - "rucrussia.ru"
+    - "dns-shop.ru"
+    - "vseinstrumenti.ru"
 
 fotogen:
   api_url: "http://127.0.0.1:8765"

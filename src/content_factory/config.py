@@ -134,7 +134,12 @@ def load_config(path: str | Path) -> AppConfig:
     cards = CardConfig(enabled=True, dir=cd.get("dir", ""),
                        base_url=cd.get("base_url", ""),
                        exts=cd.get("exts", [".jpg", ".jpeg", ".png"]),
-                       require_for_publish=bool(cd.get("require_for_publish", True)))
+                       require_for_publish=bool(cd.get("require_for_publish", True)),
+                       product_layer_mode=str(cd.get("product_layer_mode", "generated")),
+                       template_path=str(cd.get("template_path", "") or ""),
+                       reference_dir=str(cd.get("reference_dir", "state/product-references")),
+                       trusted_image_domains=[str(x).lower() for x in
+                                              (cd.get("trusted_image_domains", []) or [])])
     default_card_mode = cd.get("default_mode", "mcp")
     # карта category_id→mode: ключи приводим к int (category_id из oasis — целые)
     modes_by_category = {int(k): str(v) for k, v in (cd.get("modes_by_category") or {}).items()}

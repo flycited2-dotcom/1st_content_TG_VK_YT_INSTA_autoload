@@ -151,6 +151,37 @@ def test_run_once_uses_specs_fn(tmp_path):
     assert seen.get("has") is True
 
 
+def test_run_once_exact_mode_uses_compositor_not_generation_api(tmp_path):
+    out = tmp_path / "out"; out.mkdir()
+    cfg = _cfg(tmp_path, queue_db=_make_queue_db(tmp_path, []), output_dir=str(out),
+               mode="exact")
+    store = CardJobStore(tmp_path / "s.db")
+    groups = group_by_series([_o("breeze:NC2", 9, "http://p/2.jpg", series="Gloria")])
+    seen = {}
+
+    def compose(group, photo, output):
+        seen["photo"] = photo
+        output.write_bytes(b"EXACT")
+
+    submitted, published = run_once(
+        groups, cfg, store, fetch_photo=lambda _: b"ORIGINAL", exact_compose_fn=compose)
+    assert (submitted, published) == (1, 1)
+    assert seen["photo"] == b"ORIGINAL"
+
+
+def test_run_once_missing_photo_is_held_and_queued_for_research(tmp_path):
+    out = tmp_path / "out"; out.mkdir()
+    cfg = _cfg(tmp_path, queue_db=_make_queue_db(tmp_path, []), output_dir=str(out))
+    store = CardJobStore(tmp_path / "s.db")
+    groups = group_by_series([_o("breeze:NC2", 9, None, series="Gloria")])
+    queued = []
+    submitted, published = run_once(
+        groups, cfg, store, reference_lookup=lambda _: None,
+        missing_photo=lambda group: queued.append(group.supplier_sku))
+    assert (submitted, published) == (0, 0)
+    assert queued == ["breeze:NC2"]
+
+
 def test_run_once_retries_failed_until_cap(tmp_path):
     from content_factory.content.cards import card_key
     out = tmp_path / "out"; out.mkdir()
