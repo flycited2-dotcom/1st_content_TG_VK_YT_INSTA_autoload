@@ -6,6 +6,7 @@
 """
 from __future__ import annotations
 import json
+import os
 import sqlite3
 import time
 from datetime import datetime
@@ -30,6 +31,13 @@ from content_factory.bot.manual_photo import make_manual_photo_fn
 from content_factory.bot.voice import transcribe_voice_bytes
 from content_factory.bot.cmd_input import (
     bare_arg_command, prompt_for, resolve_reply, PendingCmdStore)
+
+
+def vk_plan_store_from_env() -> VkContentPlanStore:
+    """Открыть общую VK-очередь, используемую планировщиком и Telegram-пультом."""
+    return VkContentPlanStore(os.getenv(
+        "VK_PLAN_STATE_DB", "/opt/content-factory-vk/state/vk-plan.db"
+    ))
 
 
 def make_publish_fn(token: str, parse_mode: str, pub_state: PublishState, http=None,
@@ -685,9 +693,7 @@ def main():
                                       "напр.: 25990")
                     continue
                 if data_cq.startswith("vkp:"):
-                    plan_store = VkContentPlanStore(os.getenv(
-                        "VK_PLAN_STATE_DB", "/opt/content-factory-vk/state/vk-plan.db"
-                    ))
+                    plan_store = vk_plan_store_from_env()
                     reply = handle_plan_callback(data_cq, plan_store)
                     try:
                         http.post(f"{TG_API}/bot{token}/answerCallbackQuery",

@@ -14,6 +14,16 @@ def test_get_updates_parses_result():
     assert upd == [{"update_id": 5}]
 
 
+def test_vk_plan_store_uses_shared_state_path(monkeypatch, tmp_path):
+    state = tmp_path / "vk-plan.db"
+    monkeypatch.setenv("VK_PLAN_STATE_DB", str(state))
+
+    store = botrun.vk_plan_store_from_env()
+
+    assert store.path == state
+    assert state.exists()
+
+
 def test_finalize_preview_replaces_buttons_with_verdict():
     reqs = []
 
