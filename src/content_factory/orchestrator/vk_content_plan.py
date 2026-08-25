@@ -572,6 +572,52 @@ class VkContentPlanStore:
             card_path=str(path),
         )
 
+    def update_editorial_content(self, item_id: int, caption: str,
+                                 card_path: str | Path) -> bool:
+        """Атомарно обновить редакционный текст, визуал и dedupe-отпечаток."""
+        path = Path(card_path)
+        item = self.get(item_id)
+        if (item is None or item.content_type == "product" or not path.is_file()
+                or item.status not in {"visual_pending", "planned", "review"}):
+            return False
+        key, fingerprint, normalized = self._fingerprint(
+            item.source_key, caption, item.category, item.brand, item.content_type,
+        )
+        now = int(time.time())
+        with self._connect() as connection:
+            duplicate = connection.execute(
+                "SELECT source_key FROM vk_dedupe_registry "
+                "WHERE source_key<>? AND (dedupe_key=? OR content_fingerprint=?) LIMIT 1",
+                (item.source_key, key, fingerprint),
+            ).fetchone()
+            near = self._near_duplicate_source(
+                connection, normalized, item.content_type,
+                exclude_source=item.source_key,
+            )
+            if duplicate or near:
+                return False
+            connection.execute(
+                "DELETE FROM vk_dedupe_registry WHERE source_key=?", (item.source_key,),
+            )
+            connection.execute(
+                "INSERT INTO vk_dedupe_registry "
+                "(dedupe_key,source_key,content_fingerprint,normalized_text,content_type,created_at) "
+                "VALUES(?,?,?,?,?,?)",
+                (key, item.source_key, fingerprint, normalized, item.content_type, now),
+            )
+            next_status = "planned" if item.status == "visual_pending" else item.status
+            cursor = connection.execute(
+                "UPDATE vk_content_plan SET caption=?,card_path=?,status=?,updated_at=? "
+                "WHERE id=? AND status=?",
+                (caption, str(path), next_status, now, item.id, item.status),
+            )
+        return bool(cursor.rowcount)
+
+    def replace_review_message(self, item_id: int, message_id: int) -> bool:
+        return self._transition(
+            item_id, ("review",), "review", telegram_message_id=int(message_id),
+        )
+
     def require_editorial_visuals(self) -> list[int]:
         """Вернуть безвизуальные нетоварные черновики в обязательный визуальный шлюз."""
         changed = []

@@ -385,6 +385,25 @@ def test_editorial_without_visual_cannot_reach_review_or_approval(tmp_path):
     assert [item.id for item in store.for_review(int(now.timestamp()))] == [item_id]
 
 
+def test_editorial_visual_refresh_preserves_review_and_updates_dedupe(tmp_path):
+    store = VkContentPlanStore(tmp_path / "plan.db")
+    image = tmp_path / "visual.png"
+    image.touch()
+    item_id = store.add(VkPlanCandidate(
+        "editorial:refresh", 1, "Старый текст", "",
+        "climate", "EDITORIAL", "useful",
+    ), 100)
+    assert store.attach_visual(item_id, image)
+    assert store.mark_review(item_id, 77)
+
+    assert store.update_editorial_content(item_id, "Новый проверенный текст", image)
+    item = store.get(item_id)
+    assert item.status == "review"
+    assert item.caption == "Новый проверенный текст"
+    assert store.replace_review_message(item_id, 88)
+    assert store.get(item_id).telegram_message_id == 88
+
+
 def test_editorial_rotation_avoids_same_category_when_alternatives_exist():
     items = [
         VkPlanCandidate("ac1", 1, "", "x", "air_conditioners", "E", "useful"),
