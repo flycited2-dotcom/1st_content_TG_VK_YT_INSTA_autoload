@@ -12,6 +12,7 @@ from content_factory.analytics.vk import (
     VkMetricsClient,
     attributed_counts,
     campaign_url,
+    campaign_short_url,
     collect,
     tracked_caption,
     weekly_report,
@@ -34,14 +35,28 @@ def test_tracking_adds_unique_utm_and_attributed_order_link(tmp_path):
     assert query["utm_source"] == ["vk"]
     assert query["utm_content"] == ["vkp_42"]
     assert text.count("splithome.ru") == 1
+    assert campaign_short_url(42) in text
     code = text.split("start=ord_", 1)[1]
     assert links.attribution_for(code) == ("product:1", "vk", "vkp_42")
 
 
 def test_editorial_tracking_has_no_fake_order_link():
-    text, _ = tracked_caption("Полезный пост", 9, source_key="editorial:one")
-    assert "utm_content=vkp_9" in text
+    text, tracked = tracked_caption(
+        "Полезный пост\n\nИсточник: Завод — https://example.test/manual.pdf",
+        9, source_key="editorial:one",
+    )
+    assert "utm_content=vkp_9" in tracked
+    assert campaign_short_url(9) in text
+    assert "Источник:" not in text
+    assert "manual.pdf" not in text
     assert "Заказать" not in text
+
+
+def test_service_editorial_uses_direct_service_call_to_action():
+    text, _ = tracked_caption(
+        "Пора провести обслуживание", 13, source_key="editorial:service",
+    )
+    assert "Записаться на обслуживание" in text
 
 
 def test_metrics_client_collects_post_and_optional_reach(tmp_path):

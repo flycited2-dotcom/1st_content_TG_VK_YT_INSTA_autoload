@@ -120,8 +120,10 @@ class VkEditorialAgent:
         for fact in facts:
             if fact.source.url not in [value[1] for value in sources]:
                 sources.append((fact.source.publisher, fact.source.url))
-        source_lines = "\n".join(f"Источник: {publisher} — {url}" for publisher, url in sources)
-        text = f"{idea.title}\n\n{idea.intro}\n\n{bullets}\n\n{idea.cta}\n\n{source_lines}"
+        # Полные технические URL нужны исследователю и критику, но не читателю.
+        # Они сохраняются в source_urls и vk_editorial_audit; публичный текст
+        # остаётся компактным и получает одну клиентскую ссылку на этапе публикации.
+        text = f"{idea.title}\n\n{idea.intro}\n\n{bullets}\n\n{idea.cta}"
         return EditorialDraft(
             idea_id=idea.id, category=idea.category, content_type=idea.content_type,
             text=text, fact_ids=tuple(fact.id for fact in facts),

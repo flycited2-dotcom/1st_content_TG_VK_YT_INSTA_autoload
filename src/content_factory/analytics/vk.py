@@ -54,24 +54,37 @@ def campaign_url(plan_id: int, *, base_url: str = "https://splithome.ru/") -> st
     return f"{base_url.rstrip('/')}/?{query}"
 
 
+def campaign_short_url(plan_id: int, *, base_url: str = "https://splithome.ru/") -> str:
+    """Публичная короткая ссылка; сайт разворачивает её в UTM-адрес."""
+    return f"{base_url.rstrip('/')}/go/vkp_{int(plan_id)}"
+
+
 def tracked_caption(caption: str, plan_id: int, *, source_key: str = "",
                     order_bot: str = "", links: OrderLinks | None = None,
                     base_url: str = "https://splithome.ru/") -> tuple[str, str]:
     """Добавить уникальные UTM и, для товара, атрибутируемую Telegram-кнопку."""
     content_id = f"vkp_{int(plan_id)}"
     tracked_url = campaign_url(plan_id, base_url=base_url)
+    short_url = campaign_short_url(plan_id, base_url=base_url)
     lines = [line for line in adapt_vk_text(caption).splitlines()
-             if line.strip().casefold() not in {
+             if not line.strip().casefold().startswith("источник:")
+             and line.strip().casefold() not in {
                  "🌐 splithome.ru", "🌐 https://splithome.ru/", "splithome.ru",
              }]
-    footer = [f"🌐 {tracked_url}"]
-    if source_key and order_bot and links is not None and not source_key.startswith("editorial:"):
+    editorial = source_key.startswith("editorial:")
+    body = "\n".join(lines).strip()
+    if editorial:
+        action = ("🛠 Записаться на обслуживание" if "обслуж" in body.casefold()
+                  else "💬 Получить консультацию")
+        footer = [f"{action}: {short_url}"]
+    else:
+        footer = [f"🌐 {short_url}"]
+    if source_key and order_bot and links is not None and not editorial:
         code = links.code_for_context(
             source_key, origin="vk", content_id=content_id,
         )
         footer.append(f"📩 Заказать: https://t.me/{order_bot.lstrip('@')}?start=ord_{code}")
     suffix = "\n".join(footer)
-    body = "\n".join(lines).strip()
     room = VK_MESSAGE_MAX - len(suffix) - 2
     return f"{body[:room].rstrip()}\n\n{suffix}", tracked_url
 

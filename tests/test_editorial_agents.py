@@ -23,7 +23,7 @@ def test_editorial_pipeline_builds_only_sourced_non_product_posts(tmp_path):
         "useful", "service", "comparison", "trust",
     }
     assert all(draft.source_urls for draft in drafts)
-    assert all("Источник:" in draft.text for draft in drafts)
+    assert all("Источник:" not in draft.text for draft in drafts)
 
 
 def test_idea_agent_does_not_repeat_used_topic():
