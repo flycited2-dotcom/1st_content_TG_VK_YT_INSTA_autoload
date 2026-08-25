@@ -628,6 +628,16 @@ VK_PLAN_TYPE_LABELS = {
     "trust": "доверие",
 }
 
+VK_PLAN_CATEGORY_LABELS = {
+    "air_conditioners": "кондиционеры",
+    "stabilizers": "стабилизаторы",
+    "ups": "источники бесперебойного питания",
+    "ventilation": "вентиляция",
+    "recuperators": "рекуператоры",
+    "heat_pumps": "тепловые насосы",
+    "appliances": "бытовая техника",
+}
+
 
 def format_vk_plan(store: VkContentPlanStore, *, now: datetime | None = None,
                    owner_id: int = -241020718, limit: int = 20) -> str:
@@ -791,7 +801,8 @@ def materialize_editorial_plan(store: VkContentPlanStore, knowledge_path: str | 
 
 def review_caption(item: VkPlanItem, limit: int = 1024, *, body: str | None = None) -> str:
     due = datetime.fromtimestamp(item.due_at).strftime("%d.%m.%Y %H:%M")
-    header = f"🆔 {item_reference(item)}\n🗓 VK · {due} · {item.category}\n\n"
+    category = VK_PLAN_CATEGORY_LABELS.get(item.category, item.category)
+    header = f"🆔 {item_reference(item)}\n🗓 VK · {due} · {category}\n\n"
     room = int(limit) - len(header)
     return header + (body if body is not None else item.caption)[:room].rstrip()
 

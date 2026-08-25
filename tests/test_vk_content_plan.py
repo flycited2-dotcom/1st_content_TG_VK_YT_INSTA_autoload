@@ -127,6 +127,7 @@ def test_telegram_review_and_photo_task_have_same_human_identifier(tmp_path):
     )
     assert item_code(item) in review_caption(item)
     assert "XIGMA" in review_caption(item)
+    assert "кондиционеры" in review_caption(item)
     assert item_code(item) in callback_markup(item)
     assert item_code(item) in photo_markup(item)
     task = photo_task_caption(item)
