@@ -480,16 +480,40 @@ class VkContentPlanStore:
                 and int(now) < item.due_at <= upper]
 
 
-def callback_markup(item_id: int) -> str:
+def item_code(item: VkPlanItem | int) -> str:
+    """Короткий неизменяемый код материала для Telegram и журнала."""
+    item_id = item.id if isinstance(item, VkPlanItem) else int(item)
+    return f"CF-VK-{item_id:03d}"
+
+
+def item_title(item: VkPlanItem, limit: int = 64) -> str:
+    """Человекочитаемая модель из первой строки без служебных символов."""
+    title = next((line.strip() for line in (item.caption or "").splitlines()
+                  if line.strip()), item.source_key)
+    title = re.sub(r"^[^A-Za-zА-Яа-яЁё0-9]+", "", title).strip()
+    if len(title) <= limit:
+        return title
+    return title[:max(1, limit - 1)].rstrip() + "…"
+
+
+def item_reference(item: VkPlanItem) -> str:
+    return f"{item_code(item)} · {item_title(item)}"
+
+
+def callback_markup(item: VkPlanItem | int) -> str:
+    code = item_code(item)
+    item_id = item.id if isinstance(item, VkPlanItem) else int(item)
     return json.dumps({"inline_keyboard": [[
-        {"text": "✅ Одобрить для VK", "callback_data": f"vkp:a:{item_id}"},
-        {"text": "❌ Пропустить", "callback_data": f"vkp:r:{item_id}"},
+        {"text": f"✅ Одобрить {code}", "callback_data": f"vkp:a:{item_id}"},
+        {"text": f"❌ Пропустить {code}", "callback_data": f"vkp:r:{item_id}"},
     ]]}, ensure_ascii=False)
 
 
-def photo_markup(item_id: int) -> str:
+def photo_markup(item: VkPlanItem | int) -> str:
+    code = item_code(item)
+    item_id = item.id if isinstance(item, VkPlanItem) else int(item)
     return json.dumps({"inline_keyboard": [[
-        {"text": "📷 Фото прикреплено", "callback_data": f"vkp:p:{item_id}"},
+        {"text": f"📷 Фото прикреплено · {code}", "callback_data": f"vkp:p:{item_id}"},
     ]]}, ensure_ascii=False)
 
 
@@ -499,14 +523,17 @@ def handle_plan_callback(data: str, store: VkContentPlanStore) -> str:
         return "Неизвестное действие VK-плана"
     action, raw_id = match.groups()
     item_id = int(raw_id)
-    if store.get(item_id) is None:
+    item = store.get(item_id)
+    if item is None:
         return "Материал VK-плана не найден"
+    reference = item_reference(item)
     if action == "a":
-        return ("✅ Материал одобрен. Планировщик создаст отложенную запись."
+        return (f"✅ {reference} одобрен. Планировщик создаст отложенную запись."
                 if store.approve(item_id) else "Материал уже обработан")
     if action == "r":
-        return "❌ Материал исключён из плана." if store.reject(item_id) else "Материал уже обработан"
-    return ("📷 Фото отмечено как прикреплённое."
+        return (f"❌ {reference} исключён из плана."
+                if store.reject(item_id) else "Материал уже обработан")
+    return (f"📷 {reference}: фото отмечено как прикреплённое."
             if store.confirm_photo(item_id) else "Фото уже подтверждено или запись ещё не создана")
 
 
@@ -577,9 +604,22 @@ def materialize_editorial_plan(store: VkContentPlanStore, knowledge_path: str | 
 
 def review_caption(item: VkPlanItem, limit: int = 1024, *, body: str | None = None) -> str:
     due = datetime.fromtimestamp(item.due_at).strftime("%d.%m.%Y %H:%M")
-    header = f"VK · {due} · {item.category}\n\n"
+    header = f"🆔 {item_reference(item)}\n🗓 VK · {due} · {item.category}\n\n"
     room = int(limit) - len(header)
     return header + (body if body is not None else item.caption)[:room].rstrip()
+
+
+def photo_task_caption(item: VkPlanItem, *, reminder: bool = False) -> str:
+    """Подпись к точной карточке, которую нужно приложить к записи VK."""
+    due = datetime.fromtimestamp(item.due_at).strftime("%d.%m %H:%M")
+    prefix = "⚠️ Напоминание\n" if reminder else "📌 Задание на фотографию\n"
+    return (
+        f"{prefix}"
+        f"🆔 {item_reference(item)}\n"
+        f"🧱 Отложенная запись VK №{item.vk_post_id}\n"
+        f"🗓 Публикация: {due}\n\n"
+        "Прикрепите именно эту карточку к указанной записи VK, затем подтвердите кнопкой ниже."
+    )
 
 
 def send_text_with_markup(token: str, chat_id: str, text: str, markup: str,
@@ -637,14 +677,14 @@ def run_cycle(*, store: VkContentPlanStore, source_db: str, telegram_token: str,
         if item.card_path:
             preview = publish_post(
                 telegram_token, review_chat, item.card_path, review_caption(item, body=body),
-                http=client, reply_markup=callback_markup(item.id), retries=1,
+                http=client, reply_markup=callback_markup(item), retries=1,
             )
             message_id = preview.message_id if preview.ok else None
             error = preview.error
         else:
             message_id = send_text_with_markup(
                 telegram_token, review_chat, review_caption(item, 4000, body=body),
-                callback_markup(item.id), client,
+                callback_markup(item), client,
             )
             error = None if message_id else "Telegram sendMessage failed"
         if message_id and store.mark_review(item.id, message_id):
@@ -685,12 +725,15 @@ def run_cycle(*, store: VkContentPlanStore, source_db: str, telegram_token: str,
                         http=client,
                     )
                 elif item.card_path:
-                    send_text_with_markup(
-                        telegram_token, review_chat,
-                        f"VK-пост №{scheduled.post_id} запланирован на {due}. "
-                        "Прикрепите карточку к отложенной записи и подтвердите кнопкой.",
-                        photo_markup(item.id), client,
+                    photo_task = publish_post(
+                        telegram_token, review_chat, item.card_path,
+                        photo_task_caption(store.get(item.id) or item),
+                        http=client, reply_markup=photo_markup(item), retries=1,
                     )
+                    if not photo_task.ok:
+                        result["errors"].append(
+                            f"photo task {item.id}: {photo_task.error or 'Telegram sendPhoto failed'}"
+                        )
                 else:
                     store.confirm_photo(item.id)
                     send_message(
@@ -710,15 +753,17 @@ def run_cycle(*, store: VkContentPlanStore, source_db: str, telegram_token: str,
         if dry_run:
             result["reminded"].append(item.id)
             continue
-        due = datetime.fromtimestamp(item.due_at).strftime("%d.%m %H:%M")
-        ok = send_text_with_markup(
-            telegram_token, review_chat,
-            f"⚠️ До публикации VK №{item.vk_post_id} ({due}) осталось меньше трёх часов, "
-            "а фото ещё не подтверждено. Прикрепите карточку или вручную отмените запись.",
-            photo_markup(item.id), client,
+        reminder = publish_post(
+            telegram_token, review_chat, item.card_path,
+            photo_task_caption(item, reminder=True),
+            http=client, reply_markup=photo_markup(item), retries=1,
         )
-        if ok and store.mark_reminded(item.id):
+        if reminder.ok and store.mark_reminded(item.id):
             result["reminded"].append(item.id)
+        elif not reminder.ok:
+            result["errors"].append(
+                f"reminder {item.id}: {reminder.error or 'Telegram sendPhoto failed'}"
+            )
     result["dedupe"] = store.dedupe_counts()
     return result
 

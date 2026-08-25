@@ -5,12 +5,18 @@ import sqlite3
 from content_factory.orchestrator.vk_content_plan import (
     VkContentPlanStore,
     VkPlanCandidate,
+    callback_markup,
     choose_candidates,
     classify_category,
     handle_plan_callback,
+    item_code,
+    item_reference,
     materialize_plan,
     materialize_editorial_plan,
+    photo_markup,
+    photo_task_caption,
     plan_slots,
+    review_caption,
 )
 
 
@@ -97,6 +103,61 @@ def test_review_and_photo_reminder_windows(tmp_path):
     assert store.mark_reminded(first)
     assert store.reminders(due - 60) == []
     assert store.get(second).status == "planned"
+
+
+def test_telegram_review_and_photo_task_have_same_human_identifier(tmp_path):
+    store = VkContentPlanStore(tmp_path / "plan.db")
+    now = datetime(2026, 8, 24, 8, 0)
+    item_id = materialize_plan(store, [
+        VkPlanCandidate(
+            "breeze|xigma|sky", 1,
+            "XIGMA Классическая сплит-система серии SKY\nЦена от 15 590 ₽",
+            "/sky.jpg", "air_conditioners", "XIGMA",
+        ),
+    ], now)[0]
+    assert store.mark_review(item_id, 100)
+    assert store.approve(item_id)
+    assert store.mark_scheduled(item_id, 9)
+    item = store.get(item_id)
+
+    assert item_code(item) == f"CF-VK-{item_id:03d}"
+    assert item_reference(item) == (
+        f"CF-VK-{item_id:03d} · XIGMA Классическая сплит-система серии SKY"
+    )
+    assert item_code(item) in review_caption(item)
+    assert "XIGMA" in review_caption(item)
+    assert item_code(item) in callback_markup(item)
+    assert item_code(item) in photo_markup(item)
+    task = photo_task_caption(item)
+    assert item_code(item) in task
+    assert "XIGMA" in task
+    assert "VK №9" in task
+
+
+def test_xigma_sky_duplicate_is_blocked_but_inverter_is_distinct(tmp_path):
+    store = VkContentPlanStore(tmp_path / "plan.db")
+    classic = VkPlanCandidate(
+        "breeze|xigma|sky", 3,
+        "XIGMA Классическая сплит-система серии SKY\n15 590 ₽",
+        "/classic.jpg", "air_conditioners", "XIGMA",
+    )
+    same_classic = VkPlanCandidate(
+        "other|xigma|sky", 2,
+        "Классический кондиционер XIGMA SKY\n16 000 ₽",
+        "/duplicate.jpg", "air_conditioners", "XIGMA",
+    )
+    inverter = VkPlanCandidate(
+        "breeze|xigma|sky inverter", 1,
+        "XIGMA Инверторная сплит-система серии SKY Inverter\n21 590 ₽",
+        "/inverter.jpg", "air_conditioners", "XIGMA",
+    )
+
+    assert store.add(classic, 100) is not None
+    assert store.add(same_classic, 200) is None
+    assert store.add(inverter, 300) is not None
+    assert [item.source_key for item in store.list()] == [
+        "breeze|xigma|sky", "breeze|xigma|sky inverter",
+    ]
 
 
 def test_catalog_change_forces_fresh_review_and_missing_item_is_blocked(tmp_path):
