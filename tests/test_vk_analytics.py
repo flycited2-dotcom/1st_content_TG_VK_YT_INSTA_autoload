@@ -34,8 +34,7 @@ def test_tracking_adds_unique_utm_and_attributed_order_link(tmp_path):
     query = parse_qs(urlparse(url).query)
     assert query["utm_source"] == ["vk"]
     assert query["utm_content"] == ["vkp_42"]
-    assert text.count("splithome.ru") == 1
-    assert campaign_short_url(42) in text
+    assert text.count("splithome.ru") == 0
     code = text.split("start=ord_", 1)[1]
     assert links.attribution_for(code) == ("product:1", "vk", "vkp_42")
 
@@ -46,17 +45,19 @@ def test_editorial_tracking_has_no_fake_order_link():
         9, source_key="editorial:one",
     )
     assert "utm_content=vkp_9" in tracked
-    assert campaign_short_url(9) in text
     assert "Источник:" not in text
     assert "manual.pdf" not in text
+    assert "splithome.ru" not in text
     assert "Заказать" not in text
 
 
 def test_service_editorial_uses_direct_service_call_to_action():
     text, _ = tracked_caption(
         "Пора провести обслуживание", 13, source_key="editorial:service",
+        editorial_destination="service",
     )
     assert "Записаться на обслуживание" in text
+    assert campaign_short_url(13, intent="service") in text
 
 
 def test_metrics_client_collects_post_and_optional_reach(tmp_path):

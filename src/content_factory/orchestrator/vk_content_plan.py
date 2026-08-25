@@ -40,7 +40,10 @@ from content_factory.dedupe import post_fingerprint, text_similarity
 
 DEFAULT_PLAN_DB = "/opt/content-factory-vk/state/vk-plan.db"
 DEFAULT_SOURCE_DB = "/opt/content-factory/state/content_factory.db"
-ACTIVE_STATUSES = {"planned", "review", "approved", "photo_pending", "photo_confirmed"}
+ACTIVE_STATUSES = {
+    "visual_pending", "planned", "review", "approved",
+    "photo_pending", "photo_confirmed",
+}
 
 
 @dataclass(frozen=True)
@@ -131,6 +134,20 @@ def choose_candidates(candidates: list[VkPlanCandidate], count: int) -> list[VkP
                 if previous is None or candidate.category != previous.category
             ), 0)
         chosen.append(pool.pop(index))
+    return chosen
+
+
+def rotate_editorial_items(items: list, previous_category: str = "") -> list:
+    """Перемешать рубрики детерминированно, не ставя одну категорию подряд."""
+    pool = list(items)
+    chosen = []
+    previous = str(previous_category or "")
+    while pool:
+        index = next((i for i, item in enumerate(pool)
+                      if getattr(item, "category", "") != previous), 0)
+        item = pool.pop(index)
+        chosen.append(item)
+        previous = getattr(item, "category", "")
     return chosen
 
 
@@ -313,12 +330,18 @@ class VkContentPlanStore:
                 (key, candidate.source_key, fingerprint, normalized,
                  candidate.content_type, now),
             )
+            initial_status = (
+                "visual_pending"
+                if candidate.content_type != "product" and not candidate.card_path
+                else "planned"
+            )
             cursor = connection.execute(
                 "INSERT INTO vk_content_plan "
                 "(source_key,due_at,category,brand,content_type,caption,card_path,status,"
                 "created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
                 (candidate.source_key, int(due_at), candidate.category, candidate.brand,
-                 candidate.content_type, candidate.caption, candidate.card_path, "planned", now, now),
+                 candidate.content_type, candidate.caption, candidate.card_path,
+                 initial_status, now, now),
             )
             return int(cursor.lastrowid)
 
@@ -376,14 +399,14 @@ class VkContentPlanStore:
         with self._connect() as connection:
             occupied = {int(row[0]) for row in connection.execute(
                 "SELECT due_at FROM vk_content_plan WHERE due_at>? AND status IN "
-                "('planned','review','approved','photo_pending','photo_confirmed')",
+                "('visual_pending','planned','review','approved','photo_pending','photo_confirmed')",
                 (now,),
             )}
             free = [int(slot) for slot in future_slots
                     if int(slot) > now and int(slot) not in occupied]
             rows = connection.execute(
                 "SELECT id,due_at,status FROM vk_content_plan WHERE due_at<=? AND status IN "
-                "('planned','review','approved','photo_pending','photo_confirmed') "
+                "('visual_pending','planned','review','approved','photo_pending','photo_confirmed') "
                 "ORDER BY due_at,id", (now,),
             ).fetchall()
             for plan_id, old_due, status in rows:
@@ -416,11 +439,12 @@ class VkContentPlanStore:
                     continue
                 if free:
                     new_due = free.pop(0)
+                    next_status = "visual_pending" if status == "visual_pending" else "planned"
                     connection.execute(
-                        "UPDATE vk_content_plan SET due_at=?,status='planned',"
+                        "UPDATE vk_content_plan SET due_at=?,status=?,"
                         "telegram_message_id=NULL,reminder_sent_at=NULL,updated_at=? "
-                        "WHERE id=? AND status IN ('planned','review','approved')",
-                        (new_due, now, plan_id),
+                        "WHERE id=? AND status IN ('visual_pending','planned','review','approved')",
+                        (new_due, next_status, now, plan_id),
                     )
                     connection.execute(
                         "INSERT INTO vk_plan_events(ts,plan_id,event,old_due_at,new_due_at,details) "
@@ -432,7 +456,7 @@ class VkContentPlanStore:
                 else:
                     connection.execute(
                         "UPDATE vk_content_plan SET status='blocked_overdue',updated_at=? "
-                        "WHERE id=? AND status IN ('planned','review','approved')",
+                        "WHERE id=? AND status IN ('visual_pending','planned','review','approved')",
                         (now, plan_id),
                     )
                     connection.execute(
@@ -511,7 +535,7 @@ class VkContentPlanStore:
         assignments = ["status=?", "updated_at=?"]
         args: list[object] = [status, int(time.time())]
         for key, value in values.items():
-            if key not in {"telegram_message_id", "vk_post_id", "reminder_sent_at"}:
+            if key not in {"telegram_message_id", "vk_post_id", "reminder_sent_at", "card_path"}:
                 raise ValueError(f"Недопустимое поле плана: {key}")
             assignments.append(f"{key}=?")
             args.append(value)
@@ -529,11 +553,49 @@ class VkContentPlanStore:
                                 telegram_message_id=message_id)
 
     def approve(self, item_id: int) -> bool:
+        item = self.get(item_id)
+        if item is None or not item.card_path:
+            return False
         return self._transition(item_id, ("review",), "approved")
+
+    def attach_visual(self, item_id: int, card_path: str | Path) -> bool:
+        """Прикрепить готовый визуал и открыть материал для редакторского ревью."""
+        path = Path(card_path)
+        if not path.is_file():
+            return False
+        item = self.get(item_id)
+        if item is None or item.content_type == "product":
+            return False
+        next_status = "planned" if item.status == "visual_pending" else item.status
+        return self._transition(
+            item_id, ("visual_pending", "planned", "review"), next_status,
+            card_path=str(path),
+        )
+
+    def require_editorial_visuals(self) -> list[int]:
+        """Вернуть безвизуальные нетоварные черновики в обязательный визуальный шлюз."""
+        changed = []
+        now = int(time.time())
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT id,card_path FROM vk_content_plan WHERE content_type!='product' "
+                "AND status='planned'"
+            ).fetchall()
+            for item_id, card_path in rows:
+                if card_path and Path(str(card_path)).is_file():
+                    continue
+                cursor = connection.execute(
+                    "UPDATE vk_content_plan SET status='visual_pending',updated_at=? "
+                    "WHERE id=? AND status='planned'", (now, int(item_id)),
+                )
+                if cursor.rowcount:
+                    changed.append(int(item_id))
+        return changed
 
     def auto_approve(self, content_types: tuple[str, ...] | None = None) -> list[int]:
         """Одобрить только ещё не показанные материалы разрешённых типов."""
-        candidates = [item for item in self.list() if item.status == "planned"]
+        candidates = [item for item in self.list()
+                      if item.status == "planned" and item.card_path]
         if content_types is not None:
             candidates = [item for item in candidates if item.content_type in content_types]
         approved = []
@@ -570,7 +632,41 @@ class VkContentPlanStore:
     def for_review(self, now: int, lead_hours: int = 48, limit: int = 1) -> list[VkPlanItem]:
         upper = int(now) + int(lead_hours) * 3600
         return [item for item in self.list()
-                if item.status == "planned" and int(now) < item.due_at <= upper][:limit]
+                if item.status == "planned" and item.card_path
+                and int(now) < item.due_at <= upper][:limit]
+
+    def rebalance_editorial_queue(self, now: int | None = None) -> list[int]:
+        """Перемешать только ещё не показанные редакционные посты по их слотам."""
+        current = int(now or time.time())
+        mutable = [item for item in self.list()
+                   if item.content_type != "product"
+                   and item.status in {"visual_pending", "planned"}
+                   and item.due_at > current]
+        if len(mutable) < 2:
+            return []
+        slots = sorted(item.due_at for item in mutable)
+        first_slot = slots[0]
+        previous = next((item.category for item in reversed(self.list())
+                         if item.due_at < first_slot and item.status in ACTIVE_STATUSES), "")
+        rotated = rotate_editorial_items(mutable, previous)
+        changed = []
+        stamp = int(time.time())
+        with self._connect() as connection:
+            for item, due_at in zip(rotated, slots):
+                if item.due_at == due_at:
+                    continue
+                connection.execute(
+                    "UPDATE vk_content_plan SET due_at=?,updated_at=? WHERE id=?",
+                    (int(due_at), stamp, item.id),
+                )
+                connection.execute(
+                    "INSERT INTO vk_plan_events(ts,plan_id,event,old_due_at,new_due_at,details) "
+                    "VALUES(?,?,?,?,?,?)",
+                    (stamp, item.id, "editorial_rebalanced", item.due_at, int(due_at),
+                     "category rotation"),
+                )
+                changed.append(item.id)
+        return changed
 
     def approved(self, now: int | None = None, lead_hours: int = 24) -> list[VkPlanItem]:
         upper = None if now is None else int(now) + int(lead_hours) * 3600
@@ -606,6 +702,7 @@ def item_reference(item: VkPlanItem) -> str:
 
 
 VK_PLAN_STATUS_LABELS = {
+    "visual_pending": "🎨 ждёт тематическое изображение",
     "planned": "🗓 ждёт ревью",
     "review": "👀 отправлен на ревью",
     "approved": "✅ одобрен, ждёт создания записи VK",
@@ -636,6 +733,7 @@ VK_PLAN_CATEGORY_LABELS = {
     "recuperators": "рекуператоры",
     "heat_pumps": "тепловые насосы",
     "appliances": "бытовая техника",
+    "climate": "климатические решения",
 }
 
 
@@ -646,7 +744,7 @@ def format_vk_plan(store: VkContentPlanStore, *, now: datetime | None = None,
     current_ts = int(now.timestamp())
     items = store.list()
     current_statuses = {
-        "planned", "review", "approved", "photo_pending", "photo_confirmed",
+        "visual_pending", "planned", "review", "approved", "photo_pending", "photo_confirmed",
         "photo_overdue", "blocked_overdue",
     }
     current = [item for item in items if item.status in current_statuses]
@@ -673,7 +771,9 @@ def format_vk_plan(store: VkContentPlanStore, *, now: datetime | None = None,
             lines.append(
                 f"VK №{item.vk_post_id}: https://vk.ru/wall{int(owner_id)}_{item.vk_post_id}"
             )
-        if item.status == "planned":
+        if item.status == "visual_pending":
+            lines.append("Действие: сгенерировать и прикрепить тематическое фото; без него ревью заблокировано.")
+        elif item.status == "planned":
             lines.append("Действие: дождаться превью и проверить материал.")
         elif item.status == "review":
             lines.append("Действие: нажать кнопку под соответствующим превью.")
@@ -775,8 +875,18 @@ def materialize_plan(store: VkContentPlanStore, candidates: list[VkPlanCandidate
     return added
 
 
+def editorial_asset_path(asset_root: str | Path, idea_id: str) -> str:
+    root = Path(asset_root)
+    for suffix in (".png", ".jpg", ".jpeg", ".webp"):
+        candidate = root / f"{idea_id}{suffix}"
+        if candidate.is_file():
+            return str(candidate.resolve())
+    return ""
+
+
 def materialize_editorial_plan(store: VkContentPlanStore, knowledge_path: str | Path,
-                               now: datetime, horizon_days: int = 14) -> list[int]:
+                               now: datetime, horizon_days: int = 14,
+                               asset_root: str | Path = "assets/generated/editorial") -> list[int]:
     slots = plan_slots(now, horizon_days=horizon_days)
     occupied = {item.due_at for item in store.list() if item.status in ACTIVE_STATUSES}
     free_slots = [slot for slot in slots if slot not in occupied]
@@ -786,12 +896,16 @@ def materialize_editorial_plan(store: VkContentPlanStore, knowledge_path: str | 
     drafts = build_editorial_drafts(
         knowledge_path, used, len(free_slots), audit_db=store.path,
     )
+    previous = next((item.category for item in reversed(store.list())
+                     if item.status in ACTIVE_STATUSES), "")
+    drafts = rotate_editorial_items(drafts, previous)
     added = []
     for draft, due_at in zip(drafts, free_slots):
+        card_path = editorial_asset_path(asset_root, draft.idea_id)
         item_id = store.add(VkPlanCandidate(
             source_key=f"editorial:{draft.idea_id}:{datetime.fromtimestamp(due_at):%Y%m%d}",
             source_ts=float(due_at),
-            caption=draft.text, card_path="", category=draft.category,
+            caption=draft.text, card_path=card_path, category=draft.category,
             brand="EDITORIAL", content_type=draft.content_type,
         ), due_at)
         if item_id is not None:
@@ -840,10 +954,12 @@ def run_cycle(*, store: VkContentPlanStore, source_db: str, telegram_token: str,
               native_photo_enabled: bool = False, autonomy_level: str = "L1",
               analytics_store: VkAnalyticsStore | None = None,
               order_links: OrderLinks | None = None, order_bot: str = "Sendpr1ce_bot",
-              site_url: str = "https://splithome.ru/") -> dict:
+              site_url: str = "https://splithome.ru/",
+              editorial_service_cta_enabled: bool = False) -> dict:
     client = http or httpx.Client(timeout=60)
     result = {"planned": [], "auto_approved": [], "reviewed": [], "scheduled": [],
-              "reminded": [], "errors": [], "autonomy_level": autonomy_level,
+              "reminded": [], "visual_pending": [], "rebalanced": [],
+              "errors": [], "autonomy_level": autonomy_level,
               "overdue": {"moved": [], "blocked": [], "published_unverified": [],
                           "photo_overdue": []}}
 
@@ -862,6 +978,8 @@ def run_cycle(*, store: VkContentPlanStore, source_db: str, telegram_token: str,
             result["planned"].extend(materialize_editorial_plan(
                 store, editorial_knowledge, now,
             ))
+        result["visual_pending"] = store.require_editorial_visuals()
+        result["rebalanced"] = store.rebalance_editorial_queue(int(now.timestamp()))
     except Exception as exc:  # каталог недоступен: не планируем материал со старой ценой
         result["errors"].append(f"plan_failed: {exc}")
 
@@ -874,6 +992,10 @@ def run_cycle(*, store: VkContentPlanStore, source_db: str, telegram_token: str,
         return tracked_caption(
             item.caption, item.id, source_key=item.source_key,
             order_bot=order_bot, links=order_links, base_url=site_url,
+            editorial_destination=(
+                "service" if editorial_service_cta_enabled
+                and item.content_type == "service" else ""
+            ),
         )
 
     for item in store.for_review(int(now.timestamp())):
@@ -997,6 +1119,9 @@ def main(argv: list[str] | None = None) -> int:
         order_links=OrderLinks(source_db),
         order_bot=os.getenv("VK_ORDER_BOT", "Sendpr1ce_bot"),
         site_url=os.getenv("VK_SITE_URL", "https://splithome.ru/"),
+        editorial_service_cta_enabled=(
+            os.getenv("VK_EDITORIAL_SERVICE_CTA_ENABLED", "0") == "1"
+        ),
     )
     auto_stopped = analytics.record_cycle(len(result["errors"]))
     result["auto_stopped"] = auto_stopped

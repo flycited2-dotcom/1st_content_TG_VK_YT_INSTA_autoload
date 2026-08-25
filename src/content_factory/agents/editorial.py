@@ -44,6 +44,7 @@ class Idea:
     title: str
     intro: str
     cta: str
+    visual: str
     facts: tuple[Fact, ...]
 
 
@@ -55,6 +56,7 @@ class EditorialDraft:
     text: str
     fact_ids: tuple[str, ...]
     source_urls: tuple[str, ...]
+    visual_prompt: str
 
 
 @dataclass(frozen=True)
@@ -84,7 +86,8 @@ def load_ideas(path: str | Path) -> tuple[list[Idea], set[str]]:
         ideas.append(Idea(
             id=str(item["id"]), category=str(item["category"]),
             content_type=str(item["content_type"]), title=str(item["title"]),
-            intro=str(item["intro"]), cta=str(item["cta"]), facts=tuple(facts),
+            intro=str(item["intro"]), cta=str(item["cta"]),
+            visual=str(item.get("visual", "")).strip(), facts=tuple(facts),
         ))
     return ideas, trusted
 
@@ -128,7 +131,30 @@ class VkEditorialAgent:
             idea_id=idea.id, category=idea.category, content_type=idea.content_type,
             text=text, fact_ids=tuple(fact.id for fact in facts),
             source_urls=tuple(url for _, url in sources),
+            visual_prompt=EditorialVisualAgent().build_prompt(idea),
         )
+
+
+class EditorialVisualAgent:
+    """Формирует строгий промпт для фотореалистичного редакционного кадра.
+
+    Генератор получает сцену из редакционной базы, но не может добавлять текст,
+    бренды и продающую графику. Это сохраняет изображение универсальным для VK.
+    """
+
+    def build_prompt(self, idea: Idea) -> str:
+        if not idea.visual:
+            raise ValueError(f"У темы {idea.id} нет визуального задания")
+        return "\n".join([
+            "Use case: photorealistic-natural",
+            "Asset type: square thematic image for a VK educational post",
+            f"Primary request: {idea.visual}",
+            "Style/medium: premium documentary commercial photography, true-to-life materials and proportions, not a 3D render",
+            "Composition/framing: square 1:1, one clear focal point, safe margins for VK mobile and desktop cropping",
+            "Lighting/mood: soft natural light, trustworthy professional mood, realistic shadows and color balance",
+            "Constraints: technically plausible scene; no text; no captions; no logos; no brand marks; no watermark",
+            "Avoid: glossy CGI, staged stock-photo pose, distorted hands, floating objects, sales graphics, illegible labels",
+        ])
 
 
 class StrictCriticAgent:
@@ -153,6 +179,8 @@ class StrictCriticAgent:
                 reasons.append(f"нет ссылки для факта {fact.id}")
         if not draft.source_urls:
             reasons.append("нет источников")
+        if not draft.visual_prompt:
+            reasons.append("нет задания для тематического изображения")
         return CriticVerdict(not reasons, tuple(reasons))
 
 
@@ -164,8 +192,16 @@ class EditorialAuditStore:
             connection.execute(
                 "CREATE TABLE IF NOT EXISTS vk_editorial_audit ("
                 "idea_id TEXT PRIMARY KEY,research_json TEXT NOT NULL,draft TEXT NOT NULL,"
-                "verdict_json TEXT NOT NULL,created_at INTEGER NOT NULL)"
+                "verdict_json TEXT NOT NULL,created_at INTEGER NOT NULL,"
+                "visual_prompt TEXT NOT NULL DEFAULT '')"
             )
+            columns = {str(row[1]) for row in connection.execute(
+                "PRAGMA table_info(vk_editorial_audit)"
+            )}
+            if "visual_prompt" not in columns:
+                connection.execute(
+                    "ALTER TABLE vk_editorial_audit ADD COLUMN visual_prompt TEXT NOT NULL DEFAULT ''"
+                )
 
     def record(self, idea: Idea, facts: tuple[Fact, ...], draft: EditorialDraft,
                verdict: CriticVerdict) -> None:
@@ -174,9 +210,11 @@ class EditorialAuditStore:
         with sqlite3.connect(self.path) as connection:
             connection.execute(
                 "INSERT OR REPLACE INTO vk_editorial_audit "
-                "(idea_id,research_json,draft,verdict_json,created_at) VALUES(?,?,?,?,?)",
+                "(idea_id,research_json,draft,verdict_json,created_at,visual_prompt) "
+                "VALUES(?,?,?,?,?,?)",
                 (idea.id, json.dumps(research, ensure_ascii=False), draft.text,
-                 json.dumps(asdict(verdict), ensure_ascii=False), int(time.time())),
+                 json.dumps(asdict(verdict), ensure_ascii=False), int(time.time()),
+                 draft.visual_prompt),
             )
 
 

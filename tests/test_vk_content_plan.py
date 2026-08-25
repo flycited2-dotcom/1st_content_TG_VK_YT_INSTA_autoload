@@ -18,6 +18,7 @@ from content_factory.orchestrator.vk_content_plan import (
     photo_task_caption,
     plan_slots,
     review_caption,
+    rotate_editorial_items,
 )
 
 
@@ -253,10 +254,16 @@ def test_approved_item_is_not_scheduled_more_than_day_early(tmp_path):
 def test_l2_auto_approves_low_risk_editorial_but_not_products_or_comparison(tmp_path):
     store = VkContentPlanStore(tmp_path / "plan.db")
     now = datetime(2026, 8, 24, 8, 0)
+    useful_image = tmp_path / "useful.png"
+    comparison_image = tmp_path / "comparison.png"
+    useful_image.touch()
+    comparison_image.touch()
     rows = [
         candidate("product", "stabilizers", "RUCELF"),
-        VkPlanCandidate("editorial:useful", 2, "Совет", "", "climate", "EDITORIAL", "useful"),
-        VkPlanCandidate("editorial:comparison", 1, "Сравнение", "", "climate", "EDITORIAL", "comparison"),
+        VkPlanCandidate("editorial:useful", 2, "Совет", str(useful_image),
+                        "climate", "EDITORIAL", "useful"),
+        VkPlanCandidate("editorial:comparison", 1, "Сравнение", str(comparison_image),
+                        "climate", "EDITORIAL", "comparison"),
     ]
     materialize_plan(store, rows, now, max_products=3)
     approved = store.auto_approve(("useful", "service", "trust"))
@@ -348,7 +355,7 @@ def test_editorial_plan_rebalances_product_only_schedule(tmp_path):
     knowledge = Path(__file__).parents[1] / "config" / "vk-editorial-sources.yaml"
     added = materialize_editorial_plan(store, knowledge, now)
     active = [item for item in store.list() if item.status in {
-        "planned", "review", "approved", "photo_pending", "photo_confirmed",
+        "visual_pending", "planned", "review", "approved", "photo_pending", "photo_confirmed",
     }]
 
     assert len(added) == 9
@@ -357,3 +364,36 @@ def test_editorial_plan_rebalances_product_only_schedule(tmp_path):
     assert {item.content_type for item in active if item.content_type != "product"} == {
         "useful", "service", "comparison", "trust",
     }
+
+
+def test_editorial_without_visual_cannot_reach_review_or_approval(tmp_path):
+    store = VkContentPlanStore(tmp_path / "plan.db")
+    now = datetime(2026, 8, 24, 8, 0)
+    item_id = store.add(VkPlanCandidate(
+        "editorial:visual", 1, "Полезный материал", "",
+        "climate", "EDITORIAL", "useful",
+    ), int(datetime(2026, 8, 24, 11, 30).timestamp()))
+
+    assert store.get(item_id).status == "visual_pending"
+    assert store.for_review(int(now.timestamp())) == []
+    assert not store.approve(item_id)
+
+    image = tmp_path / "visual.png"
+    image.touch()
+    assert store.attach_visual(item_id, image)
+    assert store.get(item_id).status == "planned"
+    assert [item.id for item in store.for_review(int(now.timestamp()))] == [item_id]
+
+
+def test_editorial_rotation_avoids_same_category_when_alternatives_exist():
+    items = [
+        VkPlanCandidate("ac1", 1, "", "x", "air_conditioners", "E", "useful"),
+        VkPlanCandidate("ac2", 1, "", "x", "air_conditioners", "E", "useful"),
+        VkPlanCandidate("ups", 1, "", "x", "ups", "E", "useful"),
+        VkPlanCandidate("vent", 1, "", "x", "ventilation", "E", "useful"),
+    ]
+    rotated = rotate_editorial_items(items, "air_conditioners")
+
+    assert [item.category for item in rotated] == [
+        "ups", "air_conditioners", "ventilation", "air_conditioners",
+    ]

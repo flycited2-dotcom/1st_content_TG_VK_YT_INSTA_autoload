@@ -54,18 +54,24 @@ def campaign_url(plan_id: int, *, base_url: str = "https://splithome.ru/") -> st
     return f"{base_url.rstrip('/')}/?{query}"
 
 
-def campaign_short_url(plan_id: int, *, base_url: str = "https://splithome.ru/") -> str:
+def campaign_short_url(plan_id: int, *, base_url: str = "https://splithome.ru/",
+                       intent: str = "") -> str:
     """Публичная короткая ссылка; сайт разворачивает её в UTM-адрес."""
-    return f"{base_url.rstrip('/')}/go/vkp_{int(plan_id)}"
+    prefix = "svc_vkp" if intent == "service" else "vkp"
+    return f"{base_url.rstrip('/')}/go/{prefix}_{int(plan_id)}"
 
 
 def tracked_caption(caption: str, plan_id: int, *, source_key: str = "",
                     order_bot: str = "", links: OrderLinks | None = None,
-                    base_url: str = "https://splithome.ru/") -> tuple[str, str]:
-    """Добавить уникальные UTM и, для товара, атрибутируемую Telegram-кнопку."""
+                    base_url: str = "https://splithome.ru/",
+                    editorial_destination: str = "") -> tuple[str, str]:
+    """Добавить только релевантный переход к реально работающей цели.
+
+    Общий редакционный материал остаётся без ссылки. Сервисный CTA включается
+    явно после запуска формы, а товар ведёт в атрибутируемый заказ Telegram.
+    """
     content_id = f"vkp_{int(plan_id)}"
     tracked_url = campaign_url(plan_id, base_url=base_url)
-    short_url = campaign_short_url(plan_id, base_url=base_url)
     lines = [line for line in adapt_vk_text(caption).splitlines()
              if not line.strip().casefold().startswith("источник:")
              and line.strip().casefold() not in {
@@ -73,17 +79,19 @@ def tracked_caption(caption: str, plan_id: int, *, source_key: str = "",
              }]
     editorial = source_key.startswith("editorial:")
     body = "\n".join(lines).strip()
-    if editorial:
-        action = ("🛠 Записаться на обслуживание" if "обслуж" in body.casefold()
-                  else "💬 Получить консультацию")
-        footer = [f"{action}: {short_url}"]
-    else:
-        footer = [f"🌐 {short_url}"]
+    footer = []
+    if editorial and editorial_destination == "service":
+        footer.append(
+            "🛠 Записаться на обслуживание: "
+            f"{campaign_short_url(plan_id, base_url=base_url, intent='service')}"
+        )
     if source_key and order_bot and links is not None and not editorial:
         code = links.code_for_context(
             source_key, origin="vk", content_id=content_id,
         )
         footer.append(f"📩 Заказать: https://t.me/{order_bot.lstrip('@')}?start=ord_{code}")
+    if not footer:
+        return body[:VK_MESSAGE_MAX].rstrip(), tracked_url
     suffix = "\n".join(footer)
     room = VK_MESSAGE_MAX - len(suffix) - 2
     return f"{body[:room].rstrip()}\n\n{suffix}", tracked_url
