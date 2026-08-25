@@ -620,6 +620,14 @@ VK_PLAN_STATUS_LABELS = {
     "superseded": "↩️ заменён другим материалом",
 }
 
+VK_PLAN_TYPE_LABELS = {
+    "product": "товар",
+    "useful": "полезный материал",
+    "service": "сервис",
+    "comparison": "сравнение",
+    "trust": "доверие",
+}
+
 
 def format_vk_plan(store: VkContentPlanStore, *, now: datetime | None = None,
                    owner_id: int = -241020718, limit: int = 20) -> str:
@@ -639,7 +647,7 @@ def format_vk_plan(store: VkContentPlanStore, *, now: datetime | None = None,
     level = store.autonomy_level()
     lines = [
         f"📋 VK-контент-план · {level}",
-        f"Активно: {len(current)} · показано: {len(visible)}",
+        f"В очереди/требует внимания: {len(current)} · недавних: {len(recent_done)}",
     ]
     if not visible:
         lines.append("\nАктивных материалов нет.")
@@ -649,7 +657,7 @@ def format_vk_plan(store: VkContentPlanStore, *, now: datetime | None = None,
             "",
             f"🆔 {item_reference(item)}",
             f"{VK_PLAN_STATUS_LABELS.get(item.status, item.status)}",
-            f"🕒 {due} · {item.content_type}",
+            f"🕒 {due} · {VK_PLAN_TYPE_LABELS.get(item.content_type, item.content_type)}",
         ))
         if item.vk_post_id is not None:
             lines.append(
@@ -665,6 +673,12 @@ def format_vk_plan(store: VkContentPlanStore, *, now: datetime | None = None,
             lines.append("Действие: прикрепить показанную карточку в VK и подтвердить в Telegram.")
         elif item.status == "photo_overdue":
             lines.append("Действие: открыть запись VK и проверить, вышла ли она без фото.")
+        elif item.status == "photo_confirmed":
+            lines.append("Действие: ничего; дождаться времени выхода.")
+        elif item.status == "published_unverified":
+            lines.append("Действие: открыть ссылку и визуально проверить публикацию.")
+        elif item.status == "blocked_overdue":
+            lines.append("Действие: материал исключён; при необходимости сформировать заново.")
     hidden = len(current + recent_done) - len(visible)
     if hidden > 0:
         lines.append(f"\nЕщё материалов: {hidden}.")
