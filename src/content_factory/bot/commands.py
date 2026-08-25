@@ -24,6 +24,7 @@ HELP = ("Команды:\n"
         "/plan <N> <категория> <завтра|сегодня|ДАТА> <ЧЧ:ММ[,ЧЧ:ММ]> "
         "[mode=] [source=] [cat=] [confirm] [channel=] [id=]\n"
         "/status — что в очереди   /cancel <id> — отменить\n"
+        "/vkplan — очередь, даты и требуемые действия для публикаций VK\n"
         "/auto — авто-контент: статус, /auto on|off — включить/выключить\n"
         "/pending — посты на подтверждении   /approve <key> — опубликовать   "
         "/reject <key> — отклонить   /regen <key> — перегенерировать карточку   "
@@ -198,7 +199,7 @@ def handle_command(text: str, queue, today: date | None = None, held_provider=No
                    confirm_store=None, publish_fn=None, publish_state=None,
                    regen_fn=None, make_fn=None, find_fn=None, pick_fn=None,
                    excel_fn=None, price_fn=None, sources_fn=None, markup_fn=None,
-                   auto_fn=None, auto_state_fn=None) -> str:
+                   auto_fn=None, auto_state_fn=None, vkplan_fn=None) -> str:
     """Маршрутизация команды → действие → текст ответа владельцу.
     confirm_store/publish_fn/publish_state нужны для confirm-пилота (/approve, /reject, /pending).
     publish_fn(awaiting) -> PublishResult публикует подтверждённый пост в канал.
@@ -329,6 +330,8 @@ def handle_command(text: str, queue, today: date | None = None, held_provider=No
         if not auto_fn:
             return "❌ авто-контент недоступен"
         return auto_fn(" ".join(parts[1:]).lower() if len(parts) > 1 else None)
+    if cmd.startswith("/vkplan"):
+        return vkplan_fn() if vkplan_fn else "❌ VK-план недоступен"
     if cmd.startswith("/status"):
         return _status(queue, auto_state_fn)
     if cmd.startswith("/cancel"):

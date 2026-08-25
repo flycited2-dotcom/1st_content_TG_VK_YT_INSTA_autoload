@@ -343,6 +343,7 @@ def test_setup_bot_commands_includes_auto():
     assert path == "/botTOK/setMyCommands"
     assert '"command": "auto"' in owner_body           # выключатель автомата в меню
     assert '"command": "status"' in owner_body
+    assert '"command": "vkplan"' in owner_body
     _, default_body = reqs[1]
     assert "commands=[]" in default_body               # у клиентов меню пустое
 

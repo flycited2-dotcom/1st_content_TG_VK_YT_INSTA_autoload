@@ -8,6 +8,7 @@ from content_factory.orchestrator.vk_content_plan import (
     callback_markup,
     choose_candidates,
     classify_category,
+    format_vk_plan,
     handle_plan_callback,
     item_code,
     item_reference,
@@ -158,6 +159,59 @@ def test_xigma_sky_duplicate_is_blocked_but_inverter_is_distinct(tmp_path):
     assert [item.source_key for item in store.list()] == [
         "breeze|xigma|sky", "breeze|xigma|sky inverter",
     ]
+
+
+def test_overdue_repair_moves_unsent_and_closes_photo_states(tmp_path):
+    store = VkContentPlanStore(tmp_path / "plan.db")
+    planned = store.add(candidate("planned", "stabilizers", "RUCELF"), 100)
+    review = store.add(candidate("review", "ups", "POWERMAN"), 200)
+    approved = store.add(candidate("approved", "air_conditioners", "XIGMA"), 300)
+    confirmed = store.add(candidate("confirmed", "ventilation", "FUNAI"), 400)
+    pending = store.add(candidate("pending", "heat_pumps", "DAICHI"), 500)
+    future = store.add(candidate("future", "recuperators", "ROYAL"), 2000)
+    assert store.mark_review(review, 10)
+    assert store.mark_review(approved, 11) and store.approve(approved)
+    assert store.mark_review(confirmed, 12) and store.approve(confirmed)
+    assert store.mark_scheduled(confirmed, 77) and store.confirm_photo(confirmed)
+    assert store.mark_review(pending, 13) and store.approve(pending)
+    assert store.mark_scheduled(pending, 78)
+
+    result = store.repair_overdue(600, [1000, 2000, 3000, 4000])
+
+    assert result["moved"] == [
+        {"id": planned, "from": 100, "to": 1000},
+        {"id": review, "from": 200, "to": 3000},
+        {"id": approved, "from": 300, "to": 4000},
+    ]
+    assert result["published_unverified"] == [confirmed]
+    assert result["photo_overdue"] == [pending]
+    assert store.get(review).status == "planned"
+    assert store.get(review).telegram_message_id is None
+    assert store.get(approved).status == "planned"
+    assert store.get(confirmed).status == "published_unverified"
+    assert store.get(pending).status == "photo_overdue"
+    assert store.get(future).due_at == 2000
+    with sqlite3.connect(store.path) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM vk_plan_events").fetchone()[0] == 5
+
+
+def test_overdue_without_free_slot_is_blocked_and_vkplan_explains_actions(tmp_path):
+    store = VkContentPlanStore(tmp_path / "plan.db")
+    now = datetime(2026, 8, 25, 12, 0)
+    now_ts = int(now.timestamp())
+    overdue = store.add(candidate("late", "stabilizers", "RUCELF"), now_ts - 200)
+    pending = store.add(candidate("photo", "ups", "POWERMAN"), now_ts - 100)
+    assert store.mark_review(pending, 20) and store.approve(pending)
+    assert store.mark_scheduled(pending, 91)
+    result = store.repair_overdue(now_ts, [])
+
+    assert result["blocked"] == [overdue]
+    text = format_vk_plan(store, now=now, owner_id=-241020718)
+    assert "CF-VK" in text
+    assert "свободного слота нет" in text
+    assert "срок фото пропущен" in text
+    assert "wall-241020718_91" in text
+    assert "Действие:" in text
 
 
 def test_catalog_change_forces_fresh_review_and_missing_item_is_blocked(tmp_path):

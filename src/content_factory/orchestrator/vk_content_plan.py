@@ -165,6 +165,12 @@ class VkContentPlanStore:
                 "ts INTEGER NOT NULL,source_key TEXT NOT NULL,dedupe_key TEXT NOT NULL,"
                 "kept_source_key TEXT NOT NULL,reason TEXT NOT NULL)"
             )
+            connection.execute(
+                "CREATE TABLE IF NOT EXISTS vk_plan_events ("
+                "id INTEGER PRIMARY KEY AUTOINCREMENT,ts INTEGER NOT NULL,"
+                "plan_id INTEGER NOT NULL,event TEXT NOT NULL,old_due_at INTEGER,"
+                "new_due_at INTEGER,details TEXT NOT NULL DEFAULT '')"
+            )
             self._bootstrap_dedupe(connection)
 
     def _connect(self):
@@ -344,6 +350,105 @@ class VkContentPlanStore:
         return {"registry": int(registry), "published_claims": int(claims),
                 "blocked": int(blocked)}
 
+    def autonomy_level(self) -> str:
+        try:
+            with self._connect() as connection:
+                row = connection.execute(
+                    "SELECT value FROM vk_runtime_settings WHERE key='autonomy_level'"
+                ).fetchone()
+            return str(row[0]) if row else "L1"
+        except sqlite3.OperationalError:
+            return "L1"
+
+    def repair_overdue(self, now: int, future_slots: list[int]) -> dict[str, list]:
+        """Закрыть все состояния с истёкшим сроком без молчаливых зависаний.
+
+        Материалы, которые ещё не попали в VK, переносятся в первый свободный
+        слот и возвращаются в ``planned`` для нового ревью с корректной датой.
+        Созданная VK-запись после срока получает явный итоговый статус: фото было
+        подтверждено либо срок фотографии был пропущен.
+        """
+        now = int(now)
+        moved: list[dict[str, int]] = []
+        blocked: list[int] = []
+        published_unverified: list[int] = []
+        photo_overdue: list[int] = []
+        with self._connect() as connection:
+            occupied = {int(row[0]) for row in connection.execute(
+                "SELECT due_at FROM vk_content_plan WHERE due_at>? AND status IN "
+                "('planned','review','approved','photo_pending','photo_confirmed')",
+                (now,),
+            )}
+            free = [int(slot) for slot in future_slots
+                    if int(slot) > now and int(slot) not in occupied]
+            rows = connection.execute(
+                "SELECT id,due_at,status FROM vk_content_plan WHERE due_at<=? AND status IN "
+                "('planned','review','approved','photo_pending','photo_confirmed') "
+                "ORDER BY due_at,id", (now,),
+            ).fetchall()
+            for plan_id, old_due, status in rows:
+                plan_id, old_due = int(plan_id), int(old_due)
+                if status == "photo_confirmed":
+                    connection.execute(
+                        "UPDATE vk_content_plan SET status='published_unverified',updated_at=? "
+                        "WHERE id=? AND status='photo_confirmed'", (now, plan_id),
+                    )
+                    connection.execute(
+                        "INSERT INTO vk_plan_events(ts,plan_id,event,old_due_at,details) "
+                        "VALUES(?,?,?,?,?)",
+                        (now, plan_id, "publish_time_passed", old_due,
+                         "photo_confirmed; VK publication awaits metrics verification"),
+                    )
+                    published_unverified.append(plan_id)
+                    continue
+                if status == "photo_pending":
+                    connection.execute(
+                        "UPDATE vk_content_plan SET status='photo_overdue',updated_at=? "
+                        "WHERE id=? AND status='photo_pending'", (now, plan_id),
+                    )
+                    connection.execute(
+                        "INSERT INTO vk_plan_events(ts,plan_id,event,old_due_at,details) "
+                        "VALUES(?,?,?,?,?)",
+                        (now, plan_id, "photo_deadline_missed", old_due,
+                         "VK post reached publish time without photo confirmation"),
+                    )
+                    photo_overdue.append(plan_id)
+                    continue
+                if free:
+                    new_due = free.pop(0)
+                    connection.execute(
+                        "UPDATE vk_content_plan SET due_at=?,status='planned',"
+                        "telegram_message_id=NULL,reminder_sent_at=NULL,updated_at=? "
+                        "WHERE id=? AND status IN ('planned','review','approved')",
+                        (new_due, now, plan_id),
+                    )
+                    connection.execute(
+                        "INSERT INTO vk_plan_events(ts,plan_id,event,old_due_at,new_due_at,details) "
+                        "VALUES(?,?,?,?,?,?)",
+                        (now, plan_id, "overdue_rescheduled", old_due, new_due,
+                         f"previous_status={status}"),
+                    )
+                    moved.append({"id": plan_id, "from": old_due, "to": new_due})
+                else:
+                    connection.execute(
+                        "UPDATE vk_content_plan SET status='blocked_overdue',updated_at=? "
+                        "WHERE id=? AND status IN ('planned','review','approved')",
+                        (now, plan_id),
+                    )
+                    connection.execute(
+                        "INSERT INTO vk_plan_events(ts,plan_id,event,old_due_at,details) "
+                        "VALUES(?,?,?,?,?)",
+                        (now, plan_id, "overdue_blocked", old_due,
+                         "no free slot in planning horizon"),
+                    )
+                    blocked.append(plan_id)
+        return {
+            "moved": moved,
+            "blocked": blocked,
+            "published_unverified": published_unverified,
+            "photo_overdue": photo_overdue,
+        }
+
     def synchronize_candidates(self, candidates: list[VkPlanCandidate]) -> dict[str, int]:
         """Обновить ещё не отправленные позиции и снять исчезнувшие из наличия.
 
@@ -500,6 +605,74 @@ def item_reference(item: VkPlanItem) -> str:
     return f"{item_code(item)} · {item_title(item)}"
 
 
+VK_PLAN_STATUS_LABELS = {
+    "planned": "🗓 ждёт ревью",
+    "review": "👀 отправлен на ревью",
+    "approved": "✅ одобрен, ждёт создания записи VK",
+    "photo_pending": "🖼 требуется прикрепить фото",
+    "photo_confirmed": "📷 фото подтверждено, ждёт выхода",
+    "published_unverified": "🚀 время выхода наступило, проверяется аналитикой",
+    "photo_overdue": "⚠️ срок фото пропущен",
+    "blocked_overdue": "⛔ просрочен: свободного слота нет",
+    "blocked_unavailable": "⛔ снят с наличия",
+    "superseded_duplicate": "♻️ исключён как дубль",
+    "rejected": "❌ отклонён",
+    "superseded": "↩️ заменён другим материалом",
+}
+
+
+def format_vk_plan(store: VkContentPlanStore, *, now: datetime | None = None,
+                   owner_id: int = -241020718, limit: int = 20) -> str:
+    """Компактный прозрачный статус VK-очереди для команды ``/vkplan``."""
+    now = now or datetime.now()
+    current_ts = int(now.timestamp())
+    items = store.list()
+    current_statuses = {
+        "planned", "review", "approved", "photo_pending", "photo_confirmed",
+        "photo_overdue", "blocked_overdue",
+    }
+    current = [item for item in items if item.status in current_statuses]
+    recent_done = [item for item in items
+                   if item.status == "published_unverified"
+                   and item.due_at >= current_ts - 24 * 3600]
+    visible = sorted(current + recent_done, key=lambda item: (item.due_at, item.id))[:limit]
+    level = store.autonomy_level()
+    lines = [
+        f"📋 VK-контент-план · {level}",
+        f"Активно: {len(current)} · показано: {len(visible)}",
+    ]
+    if not visible:
+        lines.append("\nАктивных материалов нет.")
+    for item in visible:
+        due = datetime.fromtimestamp(item.due_at).strftime("%d.%m %H:%M")
+        lines.extend((
+            "",
+            f"🆔 {item_reference(item)}",
+            f"{VK_PLAN_STATUS_LABELS.get(item.status, item.status)}",
+            f"🕒 {due} · {item.content_type}",
+        ))
+        if item.vk_post_id is not None:
+            lines.append(
+                f"VK №{item.vk_post_id}: https://vk.ru/wall{int(owner_id)}_{item.vk_post_id}"
+            )
+        if item.status == "planned":
+            lines.append("Действие: дождаться превью и проверить материал.")
+        elif item.status == "review":
+            lines.append("Действие: нажать кнопку под соответствующим превью.")
+        elif item.status == "approved":
+            lines.append("Действие: планировщик создаст отложенную запись автоматически.")
+        elif item.status == "photo_pending":
+            lines.append("Действие: прикрепить показанную карточку в VK и подтвердить в Telegram.")
+        elif item.status == "photo_overdue":
+            lines.append("Действие: открыть запись VK и проверить, вышла ли она без фото.")
+    hidden = len(current + recent_done) - len(visible)
+    if hidden > 0:
+        lines.append(f"\nЕщё материалов: {hidden}.")
+    archived = len(items) - len(current) - len(recent_done)
+    lines.append(f"\nАрхив/исключено: {max(0, archived)} · Дедупликация: включена")
+    return "\n".join(lines)[:4096]
+
+
 def callback_markup(item: VkPlanItem | int) -> str:
     code = item_code(item)
     item_id = item.id if isinstance(item, VkPlanItem) else int(item)
@@ -645,7 +818,16 @@ def run_cycle(*, store: VkContentPlanStore, source_db: str, telegram_token: str,
               site_url: str = "https://splithome.ru/") -> dict:
     client = http or httpx.Client(timeout=60)
     result = {"planned": [], "auto_approved": [], "reviewed": [], "scheduled": [],
-              "reminded": [], "errors": [], "autonomy_level": autonomy_level}
+              "reminded": [], "errors": [], "autonomy_level": autonomy_level,
+              "overdue": {"moved": [], "blocked": [], "published_unverified": [],
+                          "photo_overdue": []}}
+
+    try:
+        result["overdue"] = store.repair_overdue(
+            int(now.timestamp()), plan_slots(now, horizon_days=14),
+        )
+    except Exception as exc:
+        result["errors"].append(f"overdue_repair_failed: {exc}")
 
     try:
         live_captions = build_live_caption_map()

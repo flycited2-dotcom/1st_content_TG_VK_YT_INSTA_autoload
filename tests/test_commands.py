@@ -66,6 +66,16 @@ def test_handle_status(tmp_path):
     assert "t1" in reply or "1" in reply        # есть инфо о задаче/слотах
 
 
+def test_handle_vkplan_uses_dedicated_status_provider(tmp_path):
+    q = TaskQueue(tmp_path / "q.db")
+    reply = handle_command(
+        "/vkplan", q, today=TODAY,
+        vkplan_fn=lambda: "📋 VK-контент-план · L1\nCF-VK-003 · Daichi Carbon",
+    )
+    assert "CF-VK-003" in reply
+    assert "L1" in reply
+
+
 def test_status_collapses_done_lists_pending(tmp_path):
     # жалоба владельца 2026-07-07: /status — бесконечная простыня done-слотов
     # прошлых дней; выполненное — одной сводной строкой, ожидающее — детально

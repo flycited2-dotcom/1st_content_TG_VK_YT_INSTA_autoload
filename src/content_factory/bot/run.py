@@ -23,6 +23,7 @@ from content_factory.bot.order_flow import make_order_flow
 from content_factory.orchestrator.queue import TaskQueue
 from content_factory.orchestrator.vk_content_plan import (
     VkContentPlanStore,
+    format_vk_plan,
     handle_plan_callback,
 )
 from content_factory.orchestrator.confirm_store import ConfirmStore
@@ -500,6 +501,7 @@ def setup_bot_commands(http, token: str, owner: str) -> None:
         {"command": "excel", "description": "Статус конвейера прайса"},
         {"command": "pending", "description": "Посты на подтверждении"},
         {"command": "status", "description": "Что в очереди"},
+        {"command": "vkplan", "description": "Очередь и статусы публикаций VK"},
         {"command": "auto", "description": "Авто-контент: статус, вкл/выкл"},
     ]
     try:
@@ -571,6 +573,12 @@ def main():
 
     def auto_state_fn():
         return auto_enabled(cfg.state.db) if cfg.auto_tasks else None
+
+    def vkplan_fn():
+        return format_vk_plan(
+            vk_plan_store_from_env(), now=datetime.now(),
+            owner_id=int(os.getenv("VK_OWNER_ID", "-241020718")),
+        )
     wizard_start, wizard_text, wizard_photo, wizard_callback = _make_wizard(
         cfg, owner, prices_dir, http, excel_fn)
 
@@ -904,7 +912,7 @@ def main():
                                    find_fn=find_fn, pick_fn=pick_fn, excel_fn=excel_fn,
                                    price_fn=price_fn, sources_fn=sources_fn,
                                    markup_fn=markup_fn, auto_fn=auto_fn,
-                                   auto_state_fn=auto_state_fn)
+                                   auto_state_fn=auto_state_fn, vkplan_fn=vkplan_fn)
             data = {"chat_id": chat, "text": reply}
             if text.strip().startswith("/excel"):      # кнопки отмены активных задач
                 markup = excel_cancel_markup(cfg.state.db, links)
