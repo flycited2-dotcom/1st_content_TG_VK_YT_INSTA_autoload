@@ -404,6 +404,32 @@ def test_editorial_visual_refresh_preserves_review_and_updates_dedupe(tmp_path):
     assert store.get(item_id).telegram_message_id == 88
 
 
+def test_existing_editorial_post_can_be_refreshed_without_new_plan_item(tmp_path):
+    store = VkContentPlanStore(tmp_path / "plan.db")
+    image = tmp_path / "visual.png"
+    image.touch()
+    item_id = store.add(VkPlanCandidate(
+        "editorial:clean-ac-filters:20260827", 1, "Старый короткий текст", str(image),
+        "air_conditioners", "EDITORIAL", "useful",
+    ), 100)
+    assert store.mark_review(item_id, 77)
+    assert store.approve(item_id)
+    assert store.mark_scheduled(item_id, 16)
+    with store._connect() as connection:
+        connection.execute(
+            "UPDATE vk_content_plan SET status='published_unverified' WHERE id=?", (item_id,),
+        )
+
+    assert store.update_editorial_content(
+        item_id, "Полный проверенный чек-лист", image,
+        content_type="service", category="air_conditioners",
+    )
+    item = store.get(item_id)
+    assert item.status == "published_unverified"
+    assert item.content_type == "service"
+    assert item.caption == "Полный проверенный чек-лист"
+
+
 def test_editorial_revision_stops_publication_and_keeps_comment(tmp_path):
     store = VkContentPlanStore(tmp_path / "plan.db")
     image = tmp_path / "visual.png"

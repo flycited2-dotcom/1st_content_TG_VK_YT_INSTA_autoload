@@ -587,15 +587,23 @@ class VkContentPlanStore:
         return changed
 
     def update_editorial_content(self, item_id: int, caption: str,
-                                 card_path: str | Path) -> bool:
+                                 card_path: str | Path, *,
+                                 content_type: str | None = None,
+                                 category: str | None = None) -> bool:
         """Атомарно обновить редакционный текст, визуал и dedupe-отпечаток."""
         path = Path(card_path)
         item = self.get(item_id)
+        new_content_type = str(content_type or (item.content_type if item else ""))
+        new_category = str(category or (item.category if item else ""))
         if (item is None or item.content_type == "product" or not path.is_file()
-                or item.status not in {"visual_pending", "planned", "review", "revision_requested"}):
+                or item.status not in {
+                    "visual_pending", "planned", "review", "revision_requested",
+                    "approved", "photo_pending", "photo_confirmed",
+                    "published_unverified", "published",
+                }):
             return False
         key, fingerprint, normalized = self._fingerprint(
-            item.source_key, caption, item.category, item.brand, item.content_type,
+            item.source_key, caption, new_category, item.brand, new_content_type,
         )
         now = int(time.time())
         with self._connect() as connection:
@@ -605,7 +613,7 @@ class VkContentPlanStore:
                 (item.source_key, key, fingerprint),
             ).fetchone()
             near = self._near_duplicate_source(
-                connection, normalized, item.content_type,
+                connection, normalized, new_content_type,
                 exclude_source=item.source_key,
             )
             if duplicate or near:
@@ -617,16 +625,18 @@ class VkContentPlanStore:
                 "INSERT INTO vk_dedupe_registry "
                 "(dedupe_key,source_key,content_fingerprint,normalized_text,content_type,created_at) "
                 "VALUES(?,?,?,?,?,?)",
-                (key, item.source_key, fingerprint, normalized, item.content_type, now),
+                (key, item.source_key, fingerprint, normalized, new_content_type, now),
             )
             next_status = (
                 "planned" if item.status in {"visual_pending", "revision_requested"}
                 else item.status
             )
             cursor = connection.execute(
-                "UPDATE vk_content_plan SET caption=?,card_path=?,status=?,updated_at=? "
+                "UPDATE vk_content_plan SET caption=?,card_path=?,content_type=?,category=?,"
+                "status=?,updated_at=? "
                 "WHERE id=? AND status=?",
-                (caption, str(path), next_status, now, item.id, item.status),
+                (caption, str(path), new_content_type, new_category,
+                 next_status, now, item.id, item.status),
             )
         changed = bool(cursor.rowcount)
         if changed and item.status == "revision_requested":
