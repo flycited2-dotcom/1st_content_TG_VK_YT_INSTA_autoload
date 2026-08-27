@@ -23,12 +23,17 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--state-db", default=os.getenv("VK_PLAN_STATE_DB", DEFAULT_PLAN_DB))
     parser.add_argument("--knowledge", default="config/vk-editorial-sources.yaml")
     parser.add_argument("--owner-id", type=int, default=int(os.getenv("VK_OWNER_ID", "-241020718")))
+    parser.add_argument(
+        "--db-only",
+        action="store_true",
+        help="Обновить текст и метаданные плана после ручного редактирования поста VK",
+    )
     args = parser.parse_args(argv)
 
     store = VkContentPlanStore(args.state_db)
     ideas, trusted = load_ideas(args.knowledge)
     idea_map = {idea.id: idea for idea in ideas}
-    publisher = VkPublisher(
+    publisher = None if args.db_only else VkPublisher(
         config("VK_ACCESS_TOKEN", default=""), args.owner_id, dry_run=False,
     )
     results = []
@@ -54,11 +59,12 @@ def main(argv: list[str] | None = None) -> int:
             catalog_base_url=os.getenv("VK_CATALOG_SITE_URL", "https://climat-simf.ru/"),
             editorial_destination=editorial_destination(idea.category, idea.content_type),
         )
-        publish_at = item.due_at if item.due_at > int(time.time()) else None
-        edited = publisher.edit_text(item.vk_post_id, body, publish_at=publish_at)
-        if not edited.ok:
-            results.append({"plan_id": plan_id, "ok": False, "error": edited.error})
-            continue
+        if publisher is not None:
+            publish_at = item.due_at if item.due_at > int(time.time()) else None
+            edited = publisher.edit_text(item.vk_post_id, body, publish_at=publish_at)
+            if not edited.ok:
+                results.append({"plan_id": plan_id, "ok": False, "error": edited.error})
+                continue
         updated = store.update_editorial_content(
             item.id, draft.text, Path(item.card_path),
             content_type=idea.content_type, category=idea.category,
@@ -67,6 +73,7 @@ def main(argv: list[str] | None = None) -> int:
             "plan_id": plan_id, "post_id": item.vk_post_id,
             "ok": bool(updated), "points": len(facts),
             "destination": editorial_destination(idea.category, idea.content_type),
+            "db_only": args.db_only,
         })
     print(json.dumps(results, ensure_ascii=False))
     return 0 if all(row.get("ok") for row in results) else 1
