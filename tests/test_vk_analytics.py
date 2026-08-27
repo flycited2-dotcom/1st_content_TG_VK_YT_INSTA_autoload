@@ -69,7 +69,10 @@ def test_stabilizer_editorial_uses_one_compact_catalog_link():
         editorial_destination=destination,
     )
     assert "Смотреть стабилизаторы" in text
-    assert campaign_short_url(26, intent="stabilizers") in text
+    assert campaign_short_url(
+        26, base_url="https://climat-simf.ru/", intent="stabilizers",
+    ) in text
+    assert "climat-simf.ru/go/st26" in text
     assert text.count("https://") == 1
 
 

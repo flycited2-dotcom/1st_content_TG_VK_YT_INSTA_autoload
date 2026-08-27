@@ -86,6 +86,7 @@ def editorial_destination(category: str, content_type: str) -> str:
 def tracked_caption(caption: str, plan_id: int, *, source_key: str = "",
                     order_bot: str = "", links: OrderLinks | None = None,
                     base_url: str = "https://splithome.ru/",
+                    catalog_base_url: str = "https://climat-simf.ru/",
                     editorial_destination: str = "") -> tuple[str, str]:
     """Добавить ровно один релевантный переход к реально работающей цели.
 
@@ -115,7 +116,7 @@ def tracked_caption(caption: str, plan_id: int, *, source_key: str = "",
         )
         footer.append(
             f"🔎 Смотреть {label}: "
-            f"{campaign_short_url(plan_id, base_url=base_url, intent=editorial_destination)}"
+            f"{campaign_short_url(plan_id, base_url=catalog_base_url, intent=editorial_destination)}"
         )
     if source_key and order_bot and links is not None and not editorial:
         code = links.code_for_context(

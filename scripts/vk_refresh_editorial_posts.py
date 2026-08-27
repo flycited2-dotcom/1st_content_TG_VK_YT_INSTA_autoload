@@ -51,6 +51,7 @@ def main(argv: list[str] | None = None) -> int:
         body, _ = tracked_caption(
             draft.text, item.id, source_key=item.source_key,
             base_url=os.getenv("VK_SITE_URL", "https://splithome.ru/"),
+            catalog_base_url=os.getenv("VK_CATALOG_SITE_URL", "https://climat-simf.ru/"),
             editorial_destination=editorial_destination(idea.category, idea.content_type),
         )
         publish_at = item.due_at if item.due_at > int(time.time()) else None

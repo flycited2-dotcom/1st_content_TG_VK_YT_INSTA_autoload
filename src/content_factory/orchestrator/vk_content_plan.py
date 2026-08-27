@@ -1091,6 +1091,7 @@ def run_cycle(*, store: VkContentPlanStore, source_db: str, telegram_token: str,
               analytics_store: VkAnalyticsStore | None = None,
               order_links: OrderLinks | None = None, order_bot: str = "Sendpr1ce_bot",
               site_url: str = "https://splithome.ru/",
+              catalog_site_url: str = "https://climat-simf.ru/",
               editorial_service_cta_enabled: bool = False) -> dict:
     client = http or httpx.Client(timeout=60)
     result = {"planned": [], "auto_approved": [], "reviewed": [], "scheduled": [],
@@ -1128,6 +1129,7 @@ def run_cycle(*, store: VkContentPlanStore, source_db: str, telegram_token: str,
         return tracked_caption(
             item.caption, item.id, source_key=item.source_key,
             order_bot=order_bot, links=order_links, base_url=site_url,
+            catalog_base_url=catalog_site_url,
             editorial_destination=(
                 "" if item.content_type == "service" and not editorial_service_cta_enabled
                 else editorial_destination(item.category, item.content_type)
@@ -1255,6 +1257,7 @@ def main(argv: list[str] | None = None) -> int:
         order_links=OrderLinks(source_db),
         order_bot=os.getenv("VK_ORDER_BOT", "Sendpr1ce_bot"),
         site_url=os.getenv("VK_SITE_URL", "https://splithome.ru/"),
+        catalog_site_url=os.getenv("VK_CATALOG_SITE_URL", "https://climat-simf.ru/"),
         editorial_service_cta_enabled=(
             os.getenv("VK_EDITORIAL_SERVICE_CTA_ENABLED", "1") == "1"
         ),
