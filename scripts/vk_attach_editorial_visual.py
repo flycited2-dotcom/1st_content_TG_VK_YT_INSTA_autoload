@@ -56,7 +56,13 @@ def main(argv: list[str] | None = None) -> int:
     if not verdict.ok:
         print(json.dumps({"ok": False, "error": list(verdict.reasons)}, ensure_ascii=False))
         return 1
-    if not store.update_editorial_content(item.id, draft.text, image):
+    if not store.update_editorial_content(
+        item.id,
+        draft.text,
+        image,
+        content_type=idea.content_type,
+        category=idea.category,
+    ):
         print(json.dumps({"ok": False, "error": "content update rejected"}))
         return 1
 
@@ -70,7 +76,7 @@ def main(argv: list[str] | None = None) -> int:
             base_url=os.getenv("VK_SITE_URL", "https://splithome.ru/"),
             catalog_base_url=os.getenv("VK_CATALOG_SITE_URL", "https://climat-simf.ru/"),
             editorial_destination=editorial_destination(
-                item.category, item.content_type,
+                idea.category, idea.content_type,
             ),
         )
         client = httpx.Client(timeout=60)
