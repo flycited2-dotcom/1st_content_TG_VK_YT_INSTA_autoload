@@ -7,6 +7,7 @@
 from __future__ import annotations
 import json
 import os
+import re
 import sqlite3
 import time
 from datetime import datetime
@@ -23,8 +24,10 @@ from content_factory.bot.order_flow import make_order_flow
 from content_factory.orchestrator.queue import TaskQueue
 from content_factory.orchestrator.vk_content_plan import (
     VkContentPlanStore,
+    callback_markup,
     format_vk_plan,
     handle_plan_callback,
+    review_caption,
 )
 from content_factory.orchestrator.confirm_store import ConfirmStore
 from content_factory.bot.commands import handle_command, handle_callback
@@ -502,6 +505,7 @@ def setup_bot_commands(http, token: str, owner: str) -> None:
         {"command": "pending", "description": "Посты на подтверждении"},
         {"command": "status", "description": "Что в очереди"},
         {"command": "vkplan", "description": "Очередь и статусы публикаций VK"},
+        {"command": "vkpost", "description": "Открыть VK-пост вместе с фото"},
         {"command": "auto", "description": "Авто-контент: статус, вкл/выкл"},
     ]
     try:
@@ -579,6 +583,24 @@ def main():
             vk_plan_store_from_env(), now=datetime.now(),
             owner_id=int(os.getenv("VK_OWNER_ID", "-241020718")),
         )
+
+    def _send_vk_plan_preview(chat_id: str, raw_id: str) -> str:
+        try:
+            item_id = int(str(raw_id).strip().removeprefix("CF-VK-"))
+        except ValueError:
+            return "❌ формат: /vkpost 13"
+        item = vk_plan_store_from_env().get(item_id)
+        if item is None:
+            return "❌ материал VK-плана не найден"
+        if not item.card_path or not Path(item.card_path).is_file():
+            return f"❌ у CF-VK-{item.id:03d} пока нет готового изображения"
+        markup = callback_markup(item) if item.status == "review" else None
+        result = publish_post(
+            token, chat_id, item.card_path, review_caption(item),
+            http=http, reply_markup=markup, retries=1,
+        )
+        return (f"🖼 Открыт CF-VK-{item.id:03d} вместе с изображением."
+                if result.ok else f"❌ не удалось отправить фото: {result.error}")
     wizard_start, wizard_text, wizard_photo, wizard_callback = _make_wizard(
         cfg, owner, prices_dir, http, excel_fn)
 
@@ -702,6 +724,26 @@ def main():
                     continue
                 if data_cq.startswith("vkp:"):
                     plan_store = vk_plan_store_from_env()
+                    edit_match = re.fullmatch(r"vkp:e:(\d+)", data_cq)
+                    if edit_match:
+                        item = plan_store.get(int(edit_match.group(1)))
+                        chat_v = str((cq.get("message") or {}).get("chat", {}).get("id", ""))
+                        if item is None or item.status not in {"review", "approved"}:
+                            reply = "Материал уже обработан"
+                        else:
+                            pending.set(owner or chat_v, f"/vkrevision {item.id}")
+                            reply = f"📝 Что изменить в CF-VK-{item.id:03d}?"
+                            _send_force_reply(
+                                owner or chat_v, reply,
+                                "например: мастер должен стоять на стремянке",
+                            )
+                        try:
+                            http.post(f"{TG_API}/bot{token}/answerCallbackQuery",
+                                      data={"callback_query_id": cq.get("id"),
+                                            "text": reply[:180]})
+                        except httpx.HTTPError:
+                            pass
+                        continue
                     reply = handle_plan_callback(data_cq, plan_store)
                     try:
                         http.post(f"{TG_API}/bot{token}/answerCallbackQuery",
@@ -906,6 +948,35 @@ def main():
                 if reconstructed:
                     text = reconstructed
             if not text:
+                continue
+            if text.lower().startswith("/vkrevision"):
+                parts_v = text.split(maxsplit=2)
+                if len(parts_v) < 3 or not parts_v[1].isdigit():
+                    reply = "❌ формат: /vkrevision 13 что именно изменить"
+                else:
+                    item_id = int(parts_v[1])
+                    store_v = vk_plan_store_from_env()
+                    item_v = store_v.get(item_id)
+                    reply = (
+                        f"🛠 CF-VK-{item_id:03d} возвращён на доработку: {parts_v[2]}"
+                        if store_v.request_revision(item_id, parts_v[2])
+                        else "Материал уже обработан или комментарий пуст"
+                    )
+                try:
+                    http.post(f"{TG_API}/bot{token}/sendMessage",
+                              data={"chat_id": chat, "text": reply})
+                except httpx.HTTPError:
+                    pass
+                continue
+            if text.lower().startswith("/vkpost"):
+                parts_v = text.split(maxsplit=1)
+                reply = (_send_vk_plan_preview(chat, parts_v[1])
+                         if len(parts_v) == 2 else "❌ формат: /vkpost 13")
+                try:
+                    http.post(f"{TG_API}/bot{token}/sendMessage",
+                              data={"chat_id": chat, "text": reply})
+                except httpx.HTTPError:
+                    pass
                 continue
             reply = handle_command(text, q, confirm_store=cs, publish_fn=publish_fn,
                                    publish_state=ps, regen_fn=regen_fn, make_fn=make_fn,

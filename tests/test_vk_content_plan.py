@@ -404,6 +404,54 @@ def test_editorial_visual_refresh_preserves_review_and_updates_dedupe(tmp_path):
     assert store.get(item_id).telegram_message_id == 88
 
 
+def test_editorial_revision_stops_publication_and_keeps_comment(tmp_path):
+    store = VkContentPlanStore(tmp_path / "plan.db")
+    image = tmp_path / "visual.png"
+    image.touch()
+    item_id = store.add(VkPlanCandidate(
+        "editorial:revision", 1, "Сервис кондиционера", str(image),
+        "air_conditioners", "EDITORIAL", "service",
+    ), 100)
+    assert store.mark_review(item_id, 77)
+
+    assert store.request_revision(
+        item_id, "Мастер должен стоять на устойчивой стремянке", kind="image",
+    )
+    assert store.get(item_id).status == "revision_requested"
+    assert store.revision_note(item_id) == "Мастер должен стоять на устойчивой стремянке"
+    assert store.approved() == []
+    assert "возвращён на доработку" in format_vk_plan(
+        store, now=datetime(2026, 8, 24, 8, 0),
+    )
+    assert "устойчивой стремянке" in format_vk_plan(
+        store, now=datetime(2026, 8, 24, 8, 0),
+    )
+
+    replacement = tmp_path / "visual-v2.png"
+    replacement.touch()
+    assert store.attach_visual(item_id, replacement)
+    assert store.get(item_id).status == "planned"
+    assert store.revision_note(item_id) == ""
+
+
+def test_regenerate_photo_callback_creates_revision_request(tmp_path):
+    store = VkContentPlanStore(tmp_path / "plan.db")
+    image = tmp_path / "visual.png"
+    image.touch()
+    item_id = store.add(VkPlanCandidate(
+        "editorial:regen", 1, "Полезный пост", str(image),
+        "climate", "EDITORIAL", "useful",
+    ), 100)
+    assert store.mark_review(item_id, 70)
+
+    answer = handle_plan_callback(f"vkp:g:{item_id}", store)
+    assert "перегенерацию" in answer
+    assert store.get(item_id).status == "revision_requested"
+    assert "Перегенерировать" in store.revision_note(item_id)
+    assert "vkp:g:" in callback_markup(item_id)
+    assert "vkp:e:" in callback_markup(item_id)
+
+
 def test_editorial_rotation_avoids_same_category_when_alternatives_exist():
     items = [
         VkPlanCandidate("ac1", 1, "", "x", "air_conditioners", "E", "useful"),

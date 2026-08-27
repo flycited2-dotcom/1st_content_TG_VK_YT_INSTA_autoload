@@ -19,7 +19,7 @@ from content_factory.agents.editorial import (
     VkEditorialAgent,
     load_ideas,
 )
-from content_factory.analytics.vk import tracked_caption
+from content_factory.analytics.vk import editorial_destination, tracked_caption
 from content_factory.orchestrator.vk_content_plan import (
     DEFAULT_PLAN_DB,
     VkContentPlanStore,
@@ -62,10 +62,16 @@ def main(argv: list[str] | None = None) -> int:
 
     replaced = False
     old_message_id = item.telegram_message_id
-    if args.replace_review and item.status == "review":
+    if args.replace_review and item.status in {"review", "revision_requested"}:
         token = config("TELEGRAM_BOT_TOKEN", default="")
         chat_id = config("TELEGRAM_REVIEW_CHANNEL_ID", default="")
-        body, _ = tracked_caption(draft.text, item.id, source_key=item.source_key)
+        body, _ = tracked_caption(
+            draft.text, item.id, source_key=item.source_key,
+            base_url=os.getenv("VK_SITE_URL", "https://splithome.ru/"),
+            editorial_destination=editorial_destination(
+                item.category, item.content_type,
+            ),
+        )
         client = httpx.Client(timeout=60)
         preview = publish_post(
             token, chat_id, str(image), review_caption(store.get(item.id) or item, body=body),
@@ -75,7 +81,11 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps({"ok": False, "error": preview.error or "preview failed"},
                              ensure_ascii=False))
             return 1
-        store.replace_review_message(item.id, preview.message_id)
+        fresh = store.get(item.id)
+        if fresh and fresh.status == "planned":
+            store.mark_review(item.id, preview.message_id)
+        else:
+            store.replace_review_message(item.id, preview.message_id)
         if old_message_id:
             client.post(
                 f"https://api.telegram.org/bot{token}/deleteMessage",

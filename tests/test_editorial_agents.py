@@ -26,6 +26,11 @@ def test_editorial_pipeline_builds_only_sourced_non_product_posts(tmp_path):
     assert all("Use case: photorealistic-natural" in draft.visual_prompt for draft in drafts)
     assert all("no watermark" in draft.visual_prompt for draft in drafts)
     assert all("Источник:" not in draft.text for draft in drafts)
+    assert all(3 <= len(draft.fact_ids) <= 7 for draft in drafts)
+    assert all(
+        all(f"{number}. " in draft.text for number in range(1, len(draft.fact_ids) + 1))
+        for draft in drafts
+    )
 
 
 def test_idea_agent_does_not_repeat_used_topic():

@@ -14,6 +14,7 @@ from content_factory.analytics.vk import (
     campaign_url,
     campaign_short_url,
     collect,
+    editorial_destination,
     tracked_caption,
     weekly_report,
 )
@@ -58,6 +59,23 @@ def test_service_editorial_uses_direct_service_call_to_action():
     )
     assert "Записаться на обслуживание" in text
     assert campaign_short_url(13, intent="service") in text
+
+
+def test_stabilizer_editorial_uses_one_compact_catalog_link():
+    destination = editorial_destination("stabilizers", "useful")
+    text, _ = tracked_caption(
+        "Как выбрать стабилизатор\n\n1. Измерьте напряжение.", 26,
+        source_key="editorial:stabilizer-measure-first",
+        editorial_destination=destination,
+    )
+    assert "Смотреть стабилизаторы" in text
+    assert campaign_short_url(26, intent="stabilizers") in text
+    assert text.count("https://") == 1
+
+
+def test_service_route_wins_over_catalog_category():
+    assert editorial_destination("air_conditioners", "service") == "service"
+    assert editorial_destination("air_conditioners", "useful") == "air_conditioners"
 
 
 def test_metrics_client_collects_post_and_optional_reach(tmp_path):

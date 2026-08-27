@@ -22,6 +22,15 @@ from content_factory.publish.vk import VK_API, VK_MESSAGE_MAX, adapt_vk_text
 LEVELS = ("L0", "L1", "L2", "L3")
 LOW_RISK_TYPES = ("useful", "service", "trust")
 
+EDITORIAL_CATALOG_DESTINATIONS = {
+    "air_conditioners": ("air_conditioners", "кондиционеры"),
+    "heat_pumps": ("heat_pumps", "тепловые насосы"),
+    "recuperators": ("recuperators", "рекуператоры"),
+    "ventilation": ("ventilation", "вентиляцию"),
+    "stabilizers": ("stabilizers", "стабилизаторы"),
+    "ups": ("ups", "источники бесперебойного питания"),
+}
+
 
 @dataclass(frozen=True)
 class Publication:
@@ -57,18 +66,31 @@ def campaign_url(plan_id: int, *, base_url: str = "https://splithome.ru/") -> st
 def campaign_short_url(plan_id: int, *, base_url: str = "https://splithome.ru/",
                        intent: str = "") -> str:
     """Публичная короткая ссылка; сайт разворачивает её в UTM-адрес."""
-    prefix = "svc_vkp" if intent == "service" else "vkp"
-    return f"{base_url.rstrip('/')}/go/{prefix}_{int(plan_id)}"
+    prefixes = {
+        "service": "svc", "air_conditioners": "ac", "heat_pumps": "hp",
+        "recuperators": "rc", "ventilation": "vt", "stabilizers": "st",
+        "ups": "ups",
+    }
+    prefix = prefixes.get(intent, "vk")
+    return f"{base_url.rstrip('/')}/go/{prefix}{int(plan_id)}"
+
+
+def editorial_destination(category: str, content_type: str) -> str:
+    """Выбрать одну клиентскую цель для нетоварного материала."""
+    if content_type == "service":
+        return "service"
+    destination = EDITORIAL_CATALOG_DESTINATIONS.get(category)
+    return destination[0] if destination else ""
 
 
 def tracked_caption(caption: str, plan_id: int, *, source_key: str = "",
                     order_bot: str = "", links: OrderLinks | None = None,
                     base_url: str = "https://splithome.ru/",
                     editorial_destination: str = "") -> tuple[str, str]:
-    """Добавить только релевантный переход к реально работающей цели.
+    """Добавить ровно один релевантный переход к реально работающей цели.
 
-    Общий редакционный материал остаётся без ссылки. Сервисный CTA включается
-    явно после запуска формы, а товар ведёт в атрибутируемый заказ Telegram.
+    Сервисный материал ведёт на форму обслуживания, тематический материал —
+    в соответствующий раздел ассортимента, а товар — в заказ Telegram.
     """
     content_id = f"vkp_{int(plan_id)}"
     tracked_url = campaign_url(plan_id, base_url=base_url)
@@ -84,6 +106,16 @@ def tracked_caption(caption: str, plan_id: int, *, source_key: str = "",
         footer.append(
             "🛠 Записаться на обслуживание: "
             f"{campaign_short_url(plan_id, base_url=base_url, intent='service')}"
+        )
+    elif editorial and editorial_destination:
+        label = next(
+            (title for key, title in EDITORIAL_CATALOG_DESTINATIONS.values()
+             if key == editorial_destination),
+            "технику",
+        )
+        footer.append(
+            f"🔎 Смотреть {label}: "
+            f"{campaign_short_url(plan_id, base_url=base_url, intent=editorial_destination)}"
         )
     if source_key and order_bot and links is not None and not editorial:
         code = links.code_for_context(

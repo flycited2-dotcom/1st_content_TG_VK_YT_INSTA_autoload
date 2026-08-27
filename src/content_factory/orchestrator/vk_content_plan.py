@@ -33,6 +33,7 @@ from content_factory.analytics.vk import (
     Publication,
     VkAnalyticsStore,
     tracked_caption,
+    editorial_destination,
 )
 from content_factory.publish.orders import OrderLinks
 from content_factory.dedupe import post_fingerprint, text_similarity
@@ -41,7 +42,7 @@ from content_factory.dedupe import post_fingerprint, text_similarity
 DEFAULT_PLAN_DB = "/opt/content-factory-vk/state/vk-plan.db"
 DEFAULT_SOURCE_DB = "/opt/content-factory/state/content_factory.db"
 ACTIVE_STATUSES = {
-    "visual_pending", "planned", "review", "approved",
+    "visual_pending", "planned", "review", "revision_requested", "approved",
     "photo_pending", "photo_confirmed",
 }
 
@@ -187,6 +188,12 @@ class VkContentPlanStore:
                 "id INTEGER PRIMARY KEY AUTOINCREMENT,ts INTEGER NOT NULL,"
                 "plan_id INTEGER NOT NULL,event TEXT NOT NULL,old_due_at INTEGER,"
                 "new_due_at INTEGER,details TEXT NOT NULL DEFAULT '')"
+            )
+            connection.execute(
+                "CREATE TABLE IF NOT EXISTS vk_revision_requests ("
+                "id INTEGER PRIMARY KEY AUTOINCREMENT,plan_id INTEGER NOT NULL,"
+                "kind TEXT NOT NULL,note TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'pending',"
+                "created_at INTEGER NOT NULL,resolved_at INTEGER)"
             )
             self._bootstrap_dedupe(connection)
 
@@ -399,14 +406,16 @@ class VkContentPlanStore:
         with self._connect() as connection:
             occupied = {int(row[0]) for row in connection.execute(
                 "SELECT due_at FROM vk_content_plan WHERE due_at>? AND status IN "
-                "('visual_pending','planned','review','approved','photo_pending','photo_confirmed')",
+                "('visual_pending','planned','review','revision_requested','approved',"
+                "'photo_pending','photo_confirmed')",
                 (now,),
             )}
             free = [int(slot) for slot in future_slots
                     if int(slot) > now and int(slot) not in occupied]
             rows = connection.execute(
                 "SELECT id,due_at,status FROM vk_content_plan WHERE due_at<=? AND status IN "
-                "('visual_pending','planned','review','approved','photo_pending','photo_confirmed') "
+                "('visual_pending','planned','review','revision_requested','approved',"
+                "'photo_pending','photo_confirmed') "
                 "ORDER BY due_at,id", (now,),
             ).fetchall()
             for plan_id, old_due, status in rows:
@@ -439,11 +448,12 @@ class VkContentPlanStore:
                     continue
                 if free:
                     new_due = free.pop(0)
-                    next_status = "visual_pending" if status == "visual_pending" else "planned"
+                    next_status = status if status in {"visual_pending", "revision_requested"} else "planned"
                     connection.execute(
                         "UPDATE vk_content_plan SET due_at=?,status=?,"
                         "telegram_message_id=NULL,reminder_sent_at=NULL,updated_at=? "
-                        "WHERE id=? AND status IN ('visual_pending','planned','review','approved')",
+                        "WHERE id=? AND status IN "
+                        "('visual_pending','planned','review','revision_requested','approved')",
                         (new_due, next_status, now, plan_id),
                     )
                     connection.execute(
@@ -456,7 +466,8 @@ class VkContentPlanStore:
                 else:
                     connection.execute(
                         "UPDATE vk_content_plan SET status='blocked_overdue',updated_at=? "
-                        "WHERE id=? AND status IN ('visual_pending','planned','review','approved')",
+                        "WHERE id=? AND status IN "
+                        "('visual_pending','planned','review','revision_requested','approved')",
                         (now, plan_id),
                     )
                     connection.execute(
@@ -566,11 +577,14 @@ class VkContentPlanStore:
         item = self.get(item_id)
         if item is None or item.content_type == "product":
             return False
-        next_status = "planned" if item.status == "visual_pending" else item.status
-        return self._transition(
-            item_id, ("visual_pending", "planned", "review"), next_status,
+        next_status = "planned" if item.status in {"visual_pending", "revision_requested"} else item.status
+        changed = self._transition(
+            item_id, ("visual_pending", "planned", "review", "revision_requested"), next_status,
             card_path=str(path),
         )
+        if changed and item.status == "revision_requested":
+            self.resolve_revision(item_id)
+        return changed
 
     def update_editorial_content(self, item_id: int, caption: str,
                                  card_path: str | Path) -> bool:
@@ -578,7 +592,7 @@ class VkContentPlanStore:
         path = Path(card_path)
         item = self.get(item_id)
         if (item is None or item.content_type == "product" or not path.is_file()
-                or item.status not in {"visual_pending", "planned", "review"}):
+                or item.status not in {"visual_pending", "planned", "review", "revision_requested"}):
             return False
         key, fingerprint, normalized = self._fingerprint(
             item.source_key, caption, item.category, item.brand, item.content_type,
@@ -605,13 +619,62 @@ class VkContentPlanStore:
                 "VALUES(?,?,?,?,?,?)",
                 (key, item.source_key, fingerprint, normalized, item.content_type, now),
             )
-            next_status = "planned" if item.status == "visual_pending" else item.status
+            next_status = (
+                "planned" if item.status in {"visual_pending", "revision_requested"}
+                else item.status
+            )
             cursor = connection.execute(
                 "UPDATE vk_content_plan SET caption=?,card_path=?,status=?,updated_at=? "
                 "WHERE id=? AND status=?",
                 (caption, str(path), next_status, now, item.id, item.status),
             )
-        return bool(cursor.rowcount)
+        changed = bool(cursor.rowcount)
+        if changed and item.status == "revision_requested":
+            self.resolve_revision(item_id)
+        return changed
+
+    def request_revision(self, item_id: int, note: str,
+                         kind: str = "editorial") -> bool:
+        """Остановить публикацию и сохранить редакторский комментарий."""
+        item = self.get(item_id)
+        clean_note = re.sub(r"\s+", " ", str(note or "")).strip()[:1000]
+        if item is None or not clean_note or item.status not in {"review", "approved"}:
+            return False
+        now = int(time.time())
+        with self._connect() as connection:
+            cursor = connection.execute(
+                "UPDATE vk_content_plan SET status='revision_requested',updated_at=? "
+                "WHERE id=? AND status IN ('review','approved')",
+                (now, int(item_id)),
+            )
+            if not cursor.rowcount:
+                return False
+            connection.execute(
+                "UPDATE vk_revision_requests SET status='superseded',resolved_at=? "
+                "WHERE plan_id=? AND status='pending'", (now, int(item_id)),
+            )
+            connection.execute(
+                "INSERT INTO vk_revision_requests(plan_id,kind,note,status,created_at) "
+                "VALUES(?,?,?,?,?)",
+                (int(item_id), str(kind or "editorial")[:40], clean_note, "pending", now),
+            )
+        return True
+
+    def revision_note(self, item_id: int) -> str:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT note FROM vk_revision_requests WHERE plan_id=? AND status='pending' "
+                "ORDER BY id DESC LIMIT 1", (int(item_id),),
+            ).fetchone()
+        return str(row[0]) if row else ""
+
+    def resolve_revision(self, item_id: int) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                "UPDATE vk_revision_requests SET status='resolved',resolved_at=? "
+                "WHERE plan_id=? AND status='pending'",
+                (int(time.time()), int(item_id)),
+            )
 
     def replace_review_message(self, item_id: int, message_id: int) -> bool:
         return self._transition(
@@ -751,6 +814,7 @@ VK_PLAN_STATUS_LABELS = {
     "visual_pending": "🎨 ждёт тематическое изображение",
     "planned": "🗓 ждёт ревью",
     "review": "👀 отправлен на ревью",
+    "revision_requested": "🛠 возвращён на доработку",
     "approved": "✅ одобрен, ждёт создания записи VK",
     "photo_pending": "🖼 требуется прикрепить фото",
     "photo_confirmed": "📷 фото подтверждено, ждёт выхода",
@@ -790,7 +854,7 @@ def format_vk_plan(store: VkContentPlanStore, *, now: datetime | None = None,
     current_ts = int(now.timestamp())
     items = store.list()
     current_statuses = {
-        "visual_pending", "planned", "review", "approved", "photo_pending", "photo_confirmed",
+        "visual_pending", "planned", "review", "revision_requested", "approved", "photo_pending", "photo_confirmed",
         "photo_overdue", "blocked_overdue",
     }
     current = [item for item in items if item.status in current_statuses]
@@ -822,7 +886,10 @@ def format_vk_plan(store: VkContentPlanStore, *, now: datetime | None = None,
         elif item.status == "planned":
             lines.append("Действие: дождаться превью и проверить материал.")
         elif item.status == "review":
-            lines.append("Действие: нажать кнопку под соответствующим превью.")
+            lines.append(f"Действие: открыть фото и решение по превью; команда /vkpost {item.id}.")
+        elif item.status == "revision_requested":
+            note = store.revision_note(item.id)
+            lines.append(f"Действие: доработать материал. Комментарий: {note or 'не указан'}")
         elif item.status == "approved":
             lines.append("Действие: планировщик создаст отложенную запись автоматически.")
         elif item.status == "photo_pending":
@@ -846,10 +913,16 @@ def format_vk_plan(store: VkContentPlanStore, *, now: datetime | None = None,
 def callback_markup(item: VkPlanItem | int) -> str:
     code = item_code(item)
     item_id = item.id if isinstance(item, VkPlanItem) else int(item)
-    return json.dumps({"inline_keyboard": [[
-        {"text": f"✅ Одобрить {code}", "callback_data": f"vkp:a:{item_id}"},
-        {"text": f"❌ Пропустить {code}", "callback_data": f"vkp:r:{item_id}"},
-    ]]}, ensure_ascii=False)
+    return json.dumps({"inline_keyboard": [
+        [
+            {"text": f"✅ Одобрить {code}", "callback_data": f"vkp:a:{item_id}"},
+            {"text": f"❌ Пропустить {code}", "callback_data": f"vkp:r:{item_id}"},
+        ],
+        [
+            {"text": "🔄 Перегенерировать фото", "callback_data": f"vkp:g:{item_id}"},
+            {"text": "📝 На доработку", "callback_data": f"vkp:e:{item_id}"},
+        ],
+    ]}, ensure_ascii=False)
 
 
 def photo_markup(item: VkPlanItem | int) -> str:
@@ -861,7 +934,7 @@ def photo_markup(item: VkPlanItem | int) -> str:
 
 
 def handle_plan_callback(data: str, store: VkContentPlanStore) -> str:
-    match = re.fullmatch(r"vkp:([arp]):(\d+)", data or "")
+    match = re.fullmatch(r"vkp:([arpg]):(\d+)", data or "")
     if not match:
         return "Неизвестное действие VK-плана"
     action, raw_id = match.groups()
@@ -876,6 +949,13 @@ def handle_plan_callback(data: str, store: VkContentPlanStore) -> str:
     if action == "r":
         return (f"❌ {reference} исключён из плана."
                 if store.reject(item_id) else "Материал уже обработан")
+    if action == "g":
+        return (f"🔄 {reference}: фото отправлено на перегенерацию."
+                if store.request_revision(
+                    item_id,
+                    "Перегенерировать тематическое изображение с сохранением смысла поста.",
+                    kind="image",
+                ) else "Материал уже обработан")
     return (f"📷 {reference}: фото отмечено как прикреплённое."
             if store.confirm_photo(item_id) else "Фото уже подтверждено или запись ещё не создана")
 
@@ -1039,8 +1119,8 @@ def run_cycle(*, store: VkContentPlanStore, source_db: str, telegram_token: str,
             item.caption, item.id, source_key=item.source_key,
             order_bot=order_bot, links=order_links, base_url=site_url,
             editorial_destination=(
-                "service" if editorial_service_cta_enabled
-                and item.content_type == "service" else ""
+                "" if item.content_type == "service" and not editorial_service_cta_enabled
+                else editorial_destination(item.category, item.content_type)
             ),
         )
 
@@ -1166,7 +1246,7 @@ def main(argv: list[str] | None = None) -> int:
         order_bot=os.getenv("VK_ORDER_BOT", "Sendpr1ce_bot"),
         site_url=os.getenv("VK_SITE_URL", "https://splithome.ru/"),
         editorial_service_cta_enabled=(
-            os.getenv("VK_EDITORIAL_SERVICE_CTA_ENABLED", "0") == "1"
+            os.getenv("VK_EDITORIAL_SERVICE_CTA_ENABLED", "1") == "1"
         ),
     )
     auto_stopped = analytics.record_cycle(len(result["errors"]))

@@ -118,7 +118,15 @@ class ResearchAgent:
 
 class VkEditorialAgent:
     def write(self, idea: Idea, facts: tuple[Fact, ...]) -> EditorialDraft:
-        bullets = "\n".join(f"✅ {fact.text}" for fact in facts)
+        headings = {
+            "service": "Чек-лист:",
+            "comparison": "Что важно сравнить:",
+            "trust": "Как проходит профессиональный подбор:",
+        }
+        heading = headings.get(idea.content_type, "Что важно проверить:")
+        bullets = "\n".join(
+            f"{index}. {fact.text}" for index, fact in enumerate(facts, 1)
+        )
         sources = []
         for fact in facts:
             if fact.source.url not in [value[1] for value in sources]:
@@ -126,7 +134,7 @@ class VkEditorialAgent:
         # Полные технические URL нужны исследователю и критику, но не читателю.
         # Они сохраняются в source_urls и vk_editorial_audit; публичный текст
         # остаётся компактным и получает одну клиентскую ссылку на этапе публикации.
-        text = f"{idea.title}\n\n{idea.intro}\n\n{bullets}\n\n{idea.cta}"
+        text = f"{idea.title}\n\n{idea.intro}\n\n{heading}\n{bullets}\n\n{idea.cta}"
         return EditorialDraft(
             idea_id=idea.id, category=idea.category, content_type=idea.content_type,
             text=text, fact_ids=tuple(fact.id for fact in facts),
@@ -170,10 +178,14 @@ class StrictCriticAgent:
         if len(draft.text) > self.max_length:
             reasons.append(f"текст длиннее лимита ({len(draft.text)} > {self.max_length})")
         expected = tuple(fact.id for fact in facts)
+        if not 3 <= len(facts) <= 7:
+            reasons.append(
+                f"для законченного поста требуется 3–7 проверенных пунктов, сейчас {len(facts)}"
+            )
         if draft.fact_ids != expected:
             reasons.append("набор фактов редактора не совпадает с исследованием")
-        for fact in facts:
-            if f"✅ {fact.text}" not in draft.text:
+        for index, fact in enumerate(facts, 1):
+            if f"{index}. {fact.text}" not in draft.text:
                 reasons.append(f"факт {fact.id} изменён или потерян")
             if fact.source.url not in draft.source_urls:
                 reasons.append(f"нет ссылки для факта {fact.id}")
