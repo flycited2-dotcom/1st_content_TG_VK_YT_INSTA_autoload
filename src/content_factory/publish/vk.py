@@ -201,3 +201,27 @@ class VkPublisher:
             return VkPublishResult(ok=True, post_id=int(post["post_id"]), payload=payload)
         except (KeyError, ValueError, RuntimeError, httpx.HTTPError) as exc:
             return VkPublishResult(ok=False, error=str(exc), payload=payload)
+
+    def edit_text(self, post_id: int, caption: str,
+                  *, publish_at: int | None = None) -> VkPublishResult:
+        """Обновить текст существующей или отложенной записи без создания дубля.
+
+        ``attachments`` намеренно не передаётся: уже прикреплённая вручную или
+        автоматически фотография остаётся частью существующей записи.
+        """
+        payload = {
+            "owner_id": self.owner_id,
+            "post_id": int(post_id),
+            "message": adapt_vk_text(caption),
+        }
+        if publish_at is not None:
+            payload["publish_date"] = int(publish_at)
+        if self.dry_run:
+            return VkPublishResult(ok=True, dry_run=True, post_id=int(post_id), payload=payload)
+        if not self.token:
+            return VkPublishResult(ok=False, error="VK_ACCESS_TOKEN не задан", payload=payload)
+        try:
+            self._api("wall.edit", payload)
+            return VkPublishResult(ok=True, post_id=int(post_id), payload=payload)
+        except (ValueError, RuntimeError, httpx.HTTPError) as exc:
+            return VkPublishResult(ok=False, error=str(exc), payload=payload)

@@ -167,6 +167,24 @@ def test_vk_group_can_schedule_text_for_manual_photo_flow():
     assert result.payload["publish_date"] == 1787657400
 
 
+def test_vk_edits_existing_post_without_replacing_attachments():
+    def handler(request):
+        assert request.url.path.endswith("wall.edit")
+        form = {k: v[0] for k, v in parse_qs(request.content.decode()).items()}
+        assert form["owner_id"] == "-241020718"
+        assert form["post_id"] == "19"
+        assert form["publish_date"] == "1787931000"
+        assert form["message"] == "Обновлённый пост"
+        assert "attachments" not in form
+        return httpx.Response(200, json={"response": 1})
+
+    http = httpx.Client(transport=httpx.MockTransport(handler))
+    result = VkPublisher("TOKEN", -241020718, dry_run=False, http=http).edit_text(
+        19, "Обновлённый пост", publish_at=1787931000,
+    )
+    assert result.ok and result.post_id == 19
+
+
 def test_build_vk_preview_from_review_record(tmp_path):
     config_path = tmp_path / "config.yaml"
     config_path.write_text(
