@@ -9,6 +9,8 @@ from content_factory.publish.vk_oauth import (
     VkOAuthSettings,
     VkTokenStore,
     code_challenge,
+    missing_photo_scopes,
+    resolve_publisher_token,
 )
 
 
@@ -76,3 +78,51 @@ def test_token_store_refreshes_expired_token(tmp_path):
 
     assert VkTokenStore(path).access_token(OAuth()) == "new"
     assert VkTokenStore(path).load()["refresh_token"] == "r2"
+
+
+def test_missing_photo_scopes_names_exact_gap():
+    # Именно это молча возвращает VK ID, если права приложения не согласованы.
+    assert missing_photo_scopes("vkid.personal_info offline") == ("photos", "wall", "groups")
+    assert missing_photo_scopes("vkid.personal_info offline wall photos groups") == ()
+
+
+def test_resolve_publisher_token_prefers_user_token_over_group_key(tmp_path):
+    path = tmp_path / "tokens.json"
+    VkTokenStore(path).save({"access_token": "user", "refresh_token": "r",
+                             "device_id": "d", "expires_in": 3600})
+    assert resolve_publisher_token(store_path=path, env_token="group-key") == "user"
+
+
+def test_resolve_publisher_token_refreshes_expired_user_token(tmp_path):
+    # Токен VK ID живёт час, поэтому статичное значение в .env непригодно.
+    path = tmp_path / "tokens.json"
+    path.write_text('{"access_token":"old","refresh_token":"r","device_id":"d",'
+                    '"expires_in":1,"saved_at":1}', encoding="utf-8")
+
+    class OAuth:
+        def refresh(self, refresh_token, device_id):
+            assert (refresh_token, device_id) == ("r", "d")
+            return {"access_token": "fresh", "refresh_token": "r2",
+                    "device_id": "d", "expires_in": 3600}
+
+    assert resolve_publisher_token(store_path=path, env_token="group-key",
+                                   client=OAuth()) == "fresh"
+
+
+def test_resolve_publisher_token_falls_back_to_group_key(tmp_path):
+    # Без OAuth ключ сообщества остаётся рабочим для текстовых записей.
+    assert resolve_publisher_token(store_path=tmp_path / "absent.json",
+                                   env_token="group-key") == "group-key"
+
+
+def test_resolve_publisher_token_falls_back_when_refresh_fails(tmp_path):
+    path = tmp_path / "tokens.json"
+    path.write_text('{"access_token":"old","refresh_token":"r","device_id":"d",'
+                    '"expires_in":1,"saved_at":1}', encoding="utf-8")
+
+    class OAuth:
+        def refresh(self, refresh_token, device_id):
+            raise RuntimeError("invalid_grant")
+
+    assert resolve_publisher_token(store_path=path, env_token="group-key",
+                                   client=OAuth()) == "group-key"

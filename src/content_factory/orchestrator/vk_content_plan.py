@@ -22,6 +22,7 @@ from decouple import config
 
 from content_factory.publish.telegram import publish_post, send_message
 from content_factory.publish.vk import VkPublisher, adapt_vk_text
+from content_factory.publish.vk_oauth import resolve_publisher_token
 from content_factory.publish.vk_text_sync import (
     _published_rows,
     build_live_caption_map,
@@ -1250,7 +1251,15 @@ def main(argv: list[str] | None = None) -> int:
         store=VkContentPlanStore(args.state_db), source_db=source_db,
         telegram_token=config("TELEGRAM_BOT_TOKEN", default=""),
         review_chat=config("TELEGRAM_REVIEW_CHANNEL_ID", default=""),
-        vk_token=config("VK_ACCESS_TOKEN", default=""), owner_id=args.owner_id,
+        # Нативное фото требует пользовательского токена: ключ сообщества закрыт
+        # для photos.getWallUploadServer. Резерв — ключ из .env для текстовых записей.
+        vk_token=resolve_publisher_token(
+            store_path=os.getenv("VK_TOKEN_STORE", "state/vk-tokens.json"),
+            env_token=config("VK_ACCESS_TOKEN", default=""),
+            app_id=int(os.getenv("VK_APP_ID", "54732587")),
+            redirect_uri=os.getenv("VK_REDIRECT_URI", "https://climat-simf.ru/"),
+        ),
+        owner_id=args.owner_id,
         now=datetime.now(), dry_run=(not publish_enabled or autonomy_level == "L0"),
         native_photo_enabled=os.getenv("VK_NATIVE_PHOTO_ENABLED", "0") == "1",
         autonomy_level=autonomy_level, analytics_store=analytics,

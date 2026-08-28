@@ -22,6 +22,8 @@ VK_ID_TOKEN = "https://id.vk.ru/oauth2/auth"
 # запрашиваются в том же PKCE-потоке; VK может отфильтровать расширенные права,
 # если они ещё не согласованы для приложения.
 DEFAULT_SCOPES = ("vkid.personal_info", "offline", "wall", "photos", "groups")
+# Без этих прав пользовательский токен не откроет сервер загрузки фотографий.
+PHOTO_PUBLISH_SCOPES = ("photos", "wall", "groups")
 
 
 def _b64url(data: bytes) -> str:
@@ -160,6 +162,39 @@ class VkOAuthClient:
             raise RuntimeError("VK вернул другой OAuth state")
         result["device_id"] = device_id
         return result
+
+
+def missing_photo_scopes(granted_scope: str | None) -> tuple[str, ...]:
+    """Каких прав не хватает выданному токену для нативной загрузки фото.
+
+    VK ID не отказывает в авторизации, а молча сужает ``scope`` до согласованного
+    для приложения. Поэтому фактический список прав нужно сверять после обмена, а
+    не полагаться на то, что было запрошено.
+    """
+    granted = set((granted_scope or "").replace(",", " ").split())
+    return tuple(name for name in PHOTO_PUBLISH_SCOPES if name not in granted)
+
+
+def resolve_publisher_token(*, store_path: str | Path, env_token: str = "",
+                            app_id: int = 0, redirect_uri: str = "",
+                            client: "VkOAuthClient | None" = None) -> str:
+    """Токен для публикации: пользовательский из ``store_path``, иначе ключ сообщества.
+
+    Ключ сообщества физически не может вызывать ``photos.getWallUploadServer`` —
+    VK отвечает ошибкой 27 для всей группы методов загрузки. Нативное фото требует
+    пользовательского токена, а он живёт час, поэтому его нельзя держать статично в
+    ``.env``: значение берётся из хранилища и обновляется по refresh_token.
+    Ключ сообщества остаётся резервом — текстовые записи он публикует.
+    """
+    store = VkTokenStore(store_path)
+    if not store.load().get("access_token"):
+        return env_token
+    oauth = client or VkOAuthClient(VkOAuthSettings(app_id, redirect_uri))
+    try:
+        return store.access_token(oauth)
+    except (RuntimeError, KeyError, ValueError, httpx.HTTPError):
+        # Протухший refresh_token не должен останавливать текстовую публикацию.
+        return env_token
 
 
 def _pending_from(path: Path) -> PendingAuthorization:
