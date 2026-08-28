@@ -76,3 +76,21 @@ def test_description_fallback_extracts_features():
     assert "✓ Тихий ночной режим работы" in lines
     assert "✓ Wi-Fi управление со смартфона" in lines
     assert not any("современное решение" in s for s in lines)   # вода отброшена
+
+
+def test_heating_utp_does_not_repeat_structural_bullet():
+    """Один факт не должен выходить в посте дважды разными словами.
+
+    Живой пост «XIGMA Инверторная сплит-система серии SKY Inverter» содержал
+    подряд «Работа на обогрев до −15 °C» из ТТХ и «✓ Работа на нагрев до -15 С»
+    из УТП поставщика. Дедупликация не сработала: она сверяет одно и то же
+    слово, а «обогрев» и «нагрев» — синонимы.
+    """
+    rows = _rows(("Диапазон рабочих температур на нагрев", "-15...24"),
+                 ("УТП", "Работа на нагрев до -15 С; Скрытый дисплей"))
+    lines = build_specs_for_card(rows, "XIGMA", "SKY", "breeze")
+    heating = [line for line in lines if "грев" in line.lower()]
+    assert len(heating) <= 1, f"факт обогрева продублирован: {heating}"
+    assert any("Скрытый дисплей" in line for line in lines), (
+        "полезное УТП не должно теряться вместе с дубликатом"
+    )
