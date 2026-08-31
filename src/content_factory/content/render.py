@@ -18,6 +18,9 @@ _AREA_BY_SIZE = {7: 20, 9: 25, 10: 28, 12: 35, 13: 38, 14: 40, 16: 45, 18: 50,
                  20: 55, 22: 60, 24: 70, 26: 75, 28: 80, 30: 85, 36: 100, 42: 120,
                  48: 140, 60: 170}
 _DIVIDER = "═" * 26
+# Тип техники в начале наименования: «Настенная сплит-система …», «Мобильный
+# кондиционер …». Не более трёх слов, чтобы не утащить в заголовок пол-названия.
+_TYPE_PREFIX_RE = re.compile(r"^([А-ЯЁ][а-яё]+(?:[- ][а-яё]+){0,2})")
 
 
 def _strip_stopwords(text: str, stop_words) -> str:
@@ -178,7 +181,11 @@ def _series_header(f: dict, in_stock) -> str:
     if " серии " in mt:
         head = f"{f['brand']} {mt.split(' серии ')[0].strip()} серии {f['series']}".strip()
     else:
-        head = f"{f['brand']} {f['series']}".strip()
+        # Без слова «серии» заголовок схлопывался до «Бренд + код серии»: живой
+        # пост назывался «Axioma H», хотя тип техники был в наименовании.
+        kind = _TYPE_PREFIX_RE.match(mt.strip())
+        head = (f"{f['brand']} {kind.group(1)} серии {f['series']}".strip()
+                if kind and f["series"] else f"{f['brand']} {f['series']}".strip())
     prices = [p for _, p in in_stock if p]
     if prices:
         head += f"\n<blockquote>💎 <b>от {_money(min(prices))}</b></blockquote>"

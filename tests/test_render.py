@@ -181,3 +181,30 @@ def test_serial_caption_none_member_prices_keeps_old_format():
     g = _series_group()
     cap = render_caption(g, 22390, CFG)
     assert "от 22 390" not in cap
+
+
+def _series_group_without_the_word_seriya():
+    """Серия, в наименовании которой нет слова «серии» — как у Axioma H."""
+    mk = lambda sku, model, btu, stock: Offer(
+        supplier_sku=sku, source="breeze", brand="Axioma",
+        model=f"Настенная сплит-система Axioma {model}",
+        category_id=2, btu_calc=btu, attrs={}, cost=Decimal("10000"),
+        stock=stock, photos=[], series="H")
+    return group_by_series([mk("breeze:A07", "ASX-H07", 7, 3),
+                            mk("breeze:A09", "ASX-H09", 9, 2)])[0]
+
+
+def test_serial_header_keeps_equipment_type_without_the_word_seriya():
+    """Заголовок не должен схлопываться до «Бренд + код серии».
+
+    Живой пост в VK назывался просто «Axioma H», хотя на карточке того же
+    поста было написано «Axioma Настенная сплит-система»: тип техники терялся,
+    потому что в наименовании нет слова «серии».
+    """
+    g = _series_group_without_the_word_seriya()
+    mp = [(m, 12090) for m in g.members if m.stock]
+    head = render_caption(g, 12090, CFG, member_prices=mp).splitlines()[0]
+    assert head != "Axioma H", "тип техники потерян"
+    assert "сплит-система" in head.lower()
+    assert "Axioma" in head
+    assert "ASX" not in head, "артикул конкретной модели в заголовке серии не нужен"
