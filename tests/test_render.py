@@ -208,3 +208,26 @@ def test_serial_header_keeps_equipment_type_without_the_word_seriya():
     assert "сплит-система" in head.lower()
     assert "Axioma" in head
     assert "ASX" not in head, "артикул конкретной модели в заголовке серии не нужен"
+
+
+def test_manual_description_keeps_live_prices():
+    """Ручное описание дополняет пост, а не вытесняет живые цены.
+
+    В репозитории лежат 77 готовых описаний серий с Авито. Подключить их
+    было нельзя: override заменял собой весь блок, включая таблицу
+    «Модели и цены», то есть пост терял актуальные цены и остатки — ровно
+    то, что владелец требует сверять перед публикацией.
+    """
+    g = _series_group()
+    mp = [(m, 22390 if m.btu_calc == 7 else 25990) for m in g.members if m.stock]
+    cfg = ContentConfig(
+        caption_max=1024, stop_words=[],
+        descriptions={g.key: "Настенная инверторная серия для спальни и кабинета."},
+    )
+    cap = render_caption(g, 22390, cfg, member_prices=mp)
+
+    assert "Настенная инверторная серия" in cap, "ручной текст потерян"
+    assert "Модели и цены:" in cap, "таблица цен вытеснена ручным текстом"
+    assert "22 390 ₽" in cap
+    # Проза идёт до таблицы: сначала о серии, потом цены.
+    assert cap.index("Настенная инверторная серия") < cap.index("Модели и цены:")

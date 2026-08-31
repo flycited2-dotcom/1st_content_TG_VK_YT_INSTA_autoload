@@ -225,25 +225,27 @@ def render_caption(item, price, cfg, utp_raw=None, member_prices=None) -> str:
     serial = len(in_stock) >= 2
     header = _series_header(f, in_stock) if serial else _header(f, price)
 
+    # Ручное описание заменяет собой буллеты ТТХ, но не живые цены: наличие и
+    # цена сверяются перед публикацией и не могут быть вытеснены готовым текстом.
     override = (getattr(cfg, "descriptions", None) or {}).get(f["key"])
+    lines = [header, _DIVIDER]
     if override:
-        text = f"{header}\n{_DIVIDER}\n{override.strip()}"
-    else:
+        lines += [override.strip(), ""]
+    if serial:
+        lines.append("Модели и цены:")
+        lines += _series_lines(in_stock)
+        lines.append("")
+    if not override:
         bullets = []
         power = _power_line(f)
         if power:
             bullets.append(f"❄️ {power}")
         bullets += build_specs_for_card(f["tech_rows"], f["brand"], f["series"], f["source"],
                                         utp_raw=utp_raw)
-        lines = [header, _DIVIDER]
-        if serial:
-            lines.append("Модели и цены:")
-            lines += _series_lines(in_stock)
-            lines.append("")
         if bullets:
             lines.append("Ключевые особенности:")
             lines += bullets
-        text = "\n".join(lines)
+    text = "\n".join(lines).rstrip()
 
     text = _strip_stopwords(text, getattr(cfg, "stop_words", [])).strip()
     if len(text) > cap_max:
