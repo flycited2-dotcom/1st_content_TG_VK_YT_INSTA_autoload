@@ -5,6 +5,7 @@ __pycache__/
 *.pyc
 .venv/
 .worktrees/
+artifacts/vk-market-*/
 
 # Если добавишь широкие игноры (*.txt/*.json) — добавь негейты для контента:
 # !descriptions/
