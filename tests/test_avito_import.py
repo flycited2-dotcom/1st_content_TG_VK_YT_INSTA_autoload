@@ -73,7 +73,7 @@ def _photos(tg):
     return [r for r in tg.requests if "sendPhoto" in str(r.url)]
 
 
-def _to_owner(tg, owner="1264067528"):
+def _to_owner(tg, owner="100000001"):
     """Запросы, ушедшие владельцу в личку."""
     return [r for r in tg.requests
             if "sendPhoto" not in str(r.url)
@@ -88,7 +88,7 @@ class _Exploding:
 def _run(tmp_path, items, *, tg=None, dry_run=False, sleeps=None, **over):
     kwargs = dict(state_db=tmp_path / "state" / "cf.db", media_dir=tmp_path / "media",
                   telegram_token="TOK", review_chat="-100111",
-                  publish_channel="-100999", owner_chat="1264067528",
+                  publish_channel="-100999", owner_chat="100000001",
                   dry_run=dry_run, limit=12, min_interval=0,
                   http=(tg.client if isinstance(tg, _Telegram) else tg),
                   sleep=(sleeps.append if sleeps is not None else (lambda _s: None)))
