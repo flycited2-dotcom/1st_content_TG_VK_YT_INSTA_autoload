@@ -61,3 +61,40 @@ def test_critic_blocks_changed_fact():
     verdict = StrictCriticAgent(trusted).review(idea, facts, broken)
     assert not verdict.ok
     assert any("изменён" in reason for reason in verdict.reasons)
+
+
+def _idea(**over):
+    from content_factory.agents.editorial import Fact, Idea, Source
+    source = Source(id="s1", title="Руководство", publisher="Daikin",
+                    url="https://www.daikin.ru/manual", source_type="manufacturer",
+                    checked_at="2026-08-01")
+    base = dict(id="demo", category="ventilation", content_type="useful",
+                title="Заголовок темы", intro="Пояснение проблемы.",
+                cta="🔎 Смотреть вентиляцию: https://example.com/go",
+                visual="Фотореалистичная сцена в жилой комнате.",
+                facts=(Fact("f1", "Первый факт.", source),))
+    base.update(over)
+    return Idea(**base)
+
+
+def test_post_opens_with_a_hook_and_offers_a_solution_before_the_link():
+    """Пост должен цеплять с первой строки, а не начинаться с сухого заголовка.
+
+    Владелец: «нужны живые посты, как будто их пишет маркетолог» — сначала
+    узнаваемая проблема, потом решение, и только затем ссылка.
+    """
+    idea = _idea(hook="За окном пыль и шум, а форточка — единственный источник воздуха.",
+                 offer="Приточная установка ставится за день и работает без открытых окон.")
+    text = VkEditorialAgent().write(idea, idea.facts).text
+    lines = [line for line in text.splitlines() if line.strip()]
+
+    assert lines[0] == idea.hook, "первой строкой должен идти крючок"
+    assert idea.title not in text, "сухой заголовок темы в тело поста не выводится"
+    assert text.index(idea.offer) < text.index(idea.cta), "предложение идёт перед ссылкой"
+    assert "Первый факт." in text
+
+
+def test_topic_without_a_hook_still_builds_the_old_way():
+    """Обратная совместимость: тема без крючка не должна ломаться."""
+    text = VkEditorialAgent().write(_idea(), _idea().facts).text
+    assert text.startswith("Заголовок темы")

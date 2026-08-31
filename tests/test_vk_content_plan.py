@@ -33,15 +33,23 @@ def candidate(key: str, category: str, brand: str, ts: float = 1.0) -> VkPlanCan
     )
 
 
-def test_plan_slots_make_one_slot_monday_to_saturday_and_skip_sunday():
+def test_plan_slots_make_two_slots_every_day_including_sunday():
+    """Два выхода в день, семь дней в неделю — решение владельца 31.08.2026.
+
+    Раньше был один пост в день пн–сб: лента выглядела пустой, а половина
+    слотов уходила на товары, из-за чего полезные и сервисные материалы
+    почти не появлялись.
+    """
     slots = plan_slots(datetime(2026, 8, 24, 8, 0), horizon_days=14)
     dates = [datetime.fromtimestamp(value) for value in slots]
 
-    assert len(dates) == 12
-    assert all(value.weekday() != 6 for value in dates)
+    assert len(dates) == 28
+    assert {value.weekday() for value in dates} == set(range(7))
     assert [(value.hour, value.minute) for value in dates[:4]] == [
         (11, 30), (18, 30), (11, 30), (18, 30),
     ]
+    # Оба времени приходятся на один и тот же день, а не чередуются через день.
+    assert dates[0].date() == dates[1].date()
 
 
 def test_classify_category_covers_current_store_assortment():
@@ -240,15 +248,18 @@ def test_catalog_change_forces_fresh_review_and_missing_item_is_blocked(tmp_path
 def test_approved_item_is_not_scheduled_more_than_day_early(tmp_path):
     store = VkContentPlanStore(tmp_path / "plan.db")
     now = datetime(2026, 8, 24, 8, 0)
-    first, second = materialize_plan(store, [
-        candidate("one", "stabilizers", "RUCELF", 2),
-        candidate("two", "ups", "POWERMAN", 1),
+    # Два слота в день, поэтому первые два материала выходят сегодня и оба
+    # попадают в сутки ожидания; отсечь должно третий — он уже завтра.
+    first, second, third = materialize_plan(store, [
+        candidate("one", "stabilizers", "RUCELF", 3),
+        candidate("two", "ups", "POWERMAN", 2),
+        candidate("three", "recuperators", "BREEZ", 1),
     ], now)
-    assert store.mark_review(first, 100) and store.approve(first)
-    assert store.mark_review(second, 101) and store.approve(second)
+    for plan_id, message_id in ((first, 100), (second, 101), (third, 102)):
+        assert store.mark_review(plan_id, message_id) and store.approve(plan_id)
 
     approved = store.approved(int(now.timestamp()), lead_hours=24)
-    assert [item.id for item in approved] == [first]
+    assert [item.id for item in approved] == [first, second]
 
 
 def test_l2_auto_approves_low_risk_editorial_but_not_products_or_comparison(tmp_path):
@@ -358,8 +369,10 @@ def test_editorial_plan_rebalances_product_only_schedule(tmp_path):
         "visual_pending", "planned", "review", "approved", "photo_pending", "photo_confirmed",
     }]
 
-    assert len(added) == 9
-    assert len(active) == 12
+    # Слотов стало вдвое больше, поэтому в план помещаются все редакционные темы,
+    # а не девять: именно ради этого расписание и уплотняли.
+    assert len(added) == 13
+    assert len(active) == 16
     assert sum(item.content_type == "product" for item in active) == 3
     assert {item.content_type for item in active if item.content_type != "product"} == {
         "useful", "service", "comparison", "trust",

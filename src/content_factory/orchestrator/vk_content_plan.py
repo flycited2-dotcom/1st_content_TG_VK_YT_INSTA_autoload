@@ -102,19 +102,24 @@ def extract_brand(caption: str) -> str:
 
 def plan_slots(start: datetime, *, horizon_days: int = 14,
                times: tuple[str, ...] = ("11:30", "18:30"),
-               weekdays: tuple[int, ...] = (0, 1, 2, 3, 4, 5)) -> list[int]:
-    """Один слот в день, понедельник–суббота, время чередуется."""
+               weekdays: tuple[int, ...] = (0, 1, 2, 3, 4, 5, 6)) -> list[int]:
+    """Два слота в день, все семь дней недели.
+
+    До 31.08.2026 был один выход в день пн–сб: лента выглядела пустой, а
+    половину слотов занимали товары, поэтому полезные и сервисные материалы
+    почти не доходили до читателя.
+    """
     slots: list[int] = []
     day = start.date()
     end = day + timedelta(days=horizon_days)
-    index = 0
     while day < end:
         if day.weekday() in weekdays:
-            hour, minute = map(int, times[index % len(times)].split(":"))
-            due = datetime.combine(day, datetime.min.time()).replace(hour=hour, minute=minute)
-            if due > start:
-                slots.append(int(due.timestamp()))
-                index += 1
+            for value in times:
+                hour, minute = map(int, value.split(":"))
+                due = datetime.combine(day, datetime.min.time()).replace(hour=hour,
+                                                                         minute=minute)
+                if due > start:
+                    slots.append(int(due.timestamp()))
         day += timedelta(days=1)
     return slots
 

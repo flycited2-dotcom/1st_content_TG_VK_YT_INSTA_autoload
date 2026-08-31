@@ -46,6 +46,9 @@ class Idea:
     cta: str
     visual: str
     facts: tuple[Fact, ...]
+    # Крючок и предложение — необязательные: тема без них собирается по-старому.
+    hook: str = ""
+    offer: str = ""
 
 
 @dataclass(frozen=True)
@@ -88,6 +91,8 @@ def load_ideas(path: str | Path) -> tuple[list[Idea], set[str]]:
             content_type=str(item["content_type"]), title=str(item["title"]),
             intro=str(item["intro"]), cta=str(item["cta"]),
             visual=str(item.get("visual", "")).strip(), facts=tuple(facts),
+            hook=str(item.get("hook", "")).strip(),
+            offer=str(item.get("offer", "")).strip(),
         ))
     return ideas, trusted
 
@@ -134,7 +139,12 @@ class VkEditorialAgent:
         # Полные технические URL нужны исследователю и критику, но не читателю.
         # Они сохраняются в source_urls и vk_editorial_audit; публичный текст
         # остаётся компактным и получает одну клиентскую ссылку на этапе публикации.
-        text = f"{idea.title}\n\n{idea.intro}\n\n{heading}\n{bullets}\n\n{idea.cta}"
+        # Пост читают с первой строки. Если у темы есть крючок — узнаваемая
+        # проблема читателя, — он и открывает пост, а сухой заголовок темы в
+        # тело не выводится: он остаётся служебным именем материала.
+        opening = idea.hook.strip() or idea.title
+        closing = "\n\n".join(part for part in (idea.offer.strip(), idea.cta) if part)
+        text = f"{opening}\n\n{idea.intro}\n\n{heading}\n{bullets}\n\n{closing}"
         return EditorialDraft(
             idea_id=idea.id, category=idea.category, content_type=idea.content_type,
             text=text, fact_ids=tuple(fact.id for fact in facts),
