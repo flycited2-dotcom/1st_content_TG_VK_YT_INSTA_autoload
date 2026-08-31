@@ -11,3 +11,6 @@ __pycache__/
 # !descriptions/*.txt
 # !descriptions/*.json
 # !config/card_modes.json
+
+# Транскрипты и состояние MCP-моста Codex/Claude — рабочие артефакты, не код
+.codex-claude/
