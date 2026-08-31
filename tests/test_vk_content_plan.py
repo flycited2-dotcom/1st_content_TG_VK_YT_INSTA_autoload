@@ -371,8 +371,8 @@ def test_editorial_plan_rebalances_product_only_schedule(tmp_path):
 
     # Слотов стало вдвое больше, поэтому в план помещаются все редакционные темы,
     # а не девять: именно ради этого расписание и уплотняли.
-    assert len(added) == 13
-    assert len(active) == 16
+    assert len(added) == 15
+    assert len(active) == 18
     assert sum(item.content_type == "product" for item in active) == 3
     assert {item.content_type for item in active if item.content_type != "product"} == {
         "useful", "service", "comparison", "trust",

@@ -18,7 +18,10 @@ KNOWLEDGE = Path(__file__).parents[1] / "config" / "vk-editorial-sources.yaml"
 def test_editorial_pipeline_builds_only_sourced_non_product_posts(tmp_path):
     drafts = build_editorial_drafts(KNOWLEDGE, set(), 20, tmp_path / "audit.db")
 
-    assert len(drafts) == 13
+    # Каждая тема из справочника должна давать материал — счёт не зашит,
+    # чтобы добавление новой темы не роняло тест.
+    ideas, _ = load_ideas(KNOWLEDGE)
+    assert len(drafts) == len(ideas)
     assert {draft.content_type for draft in drafts} == {
         "useful", "service", "comparison", "trust",
     }
