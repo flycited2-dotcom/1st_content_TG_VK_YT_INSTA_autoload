@@ -490,3 +490,26 @@ def test_editorial_rotation_avoids_same_category_when_alternatives_exist():
     assert [item.category for item in rotated] == [
         "ups", "air_conditioners", "ventilation", "air_conditioners",
     ]
+
+
+def test_blocked_overdue_returns_to_the_plan_once_a_slot_frees(tmp_path):
+    """«Свободного слота нет» — временная нехватка, а не выбывание из плана.
+
+    В бою материал id 1 завис в blocked_overdue с 24.08 и остался там, хотя
+    следом вышло несколько постов и слоты освободились: и выборка кандидатов,
+    и UPDATE переноса перечисляли статусы явно, а blocked_overdue в списки не
+    входил. Материал молча выпадал из контент-плана навсегда.
+    """
+    store = VkContentPlanStore(tmp_path / "plan.db")
+    stuck = store.add(candidate("late", "stabilizers", "RUCELF"), 100)
+
+    # Свободных слотов нет — материал блокируется.
+    assert store.repair_overdue(600, [])["blocked"] == [stuck]
+    assert store.get(stuck).status == "blocked_overdue"
+
+    # Слот освободился — материал обязан вернуться в план.
+    result = store.repair_overdue(700, [1000])
+
+    assert result["moved"] == [{"id": stuck, "from": 100, "to": 1000}]
+    assert store.get(stuck).status == "planned"
+    assert store.get(stuck).due_at == 1000

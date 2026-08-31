@@ -413,10 +413,13 @@ class VkContentPlanStore:
             )}
             free = [int(slot) for slot in future_slots
                     if int(slot) > now and int(slot) not in occupied]
+            # blocked_overdue тоже кандидат: это «слота не было», а не выбывание из
+            # плана. Без него материал, заблокированный при полной очереди, никогда
+            # не вернулся бы обратно — в бою один такой висел неделю.
             rows = connection.execute(
                 "SELECT id,due_at,status FROM vk_content_plan WHERE due_at<=? AND status IN "
                 "('visual_pending','planned','review','revision_requested','approved',"
-                "'photo_pending','photo_confirmed') "
+                "'photo_pending','photo_confirmed','blocked_overdue') "
                 "ORDER BY due_at,id", (now,),
             ).fetchall()
             for plan_id, old_due, status in rows:
@@ -454,7 +457,8 @@ class VkContentPlanStore:
                         "UPDATE vk_content_plan SET due_at=?,status=?,"
                         "telegram_message_id=NULL,reminder_sent_at=NULL,updated_at=? "
                         "WHERE id=? AND status IN "
-                        "('visual_pending','planned','review','revision_requested','approved')",
+                        "('visual_pending','planned','review','revision_requested',"
+                        "'approved','blocked_overdue')",
                         (new_due, next_status, now, plan_id),
                     )
                     connection.execute(
@@ -468,7 +472,8 @@ class VkContentPlanStore:
                     connection.execute(
                         "UPDATE vk_content_plan SET status='blocked_overdue',updated_at=? "
                         "WHERE id=? AND status IN "
-                        "('visual_pending','planned','review','revision_requested','approved')",
+                        "('visual_pending','planned','review','revision_requested',"
+                        "'approved','blocked_overdue')",
                         (now, plan_id),
                     )
                     connection.execute(
