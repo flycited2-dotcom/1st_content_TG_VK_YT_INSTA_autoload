@@ -370,9 +370,12 @@ def test_editorial_plan_rebalances_product_only_schedule(tmp_path):
     }]
 
     # Слотов стало вдвое больше, поэтому в план помещаются все редакционные темы,
-    # а не девять: именно ради этого расписание и уплотняли.
-    assert len(added) == 15
-    assert len(active) == 18
+    # а не девять: именно ради этого расписание и уплотняли. Счёт не зашит —
+    # добавление темы в справочник не должно ронять тест.
+    from content_factory.agents.editorial import load_ideas
+    ideas, _ = load_ideas(knowledge)
+    assert len(added) == len(ideas)
+    assert len(active) == 3 + len(ideas)
     assert sum(item.content_type == "product" for item in active) == 3
     assert {item.content_type for item in active if item.content_type != "product"} == {
         "useful", "service", "comparison", "trust",
