@@ -18,12 +18,6 @@ sources:
     url: https://daichi.ru/upload/iblock/f83/o5ivq3ljjhs8aamn37wj60569xeabt8w/IMmOM%20PRAW-TENA2_PRAW-TEDA2_DP22-03.01.01.pdf
     type: official
     checked_at: 2026-08-23
-  daichi_inverter_catalog:
-    title: Каталог бытовых кондиционеров 2026
-    publisher: Daichi
-    url: https://daichi.ru/upload/iblock/3d0/89yjsqkizhfwjx889xrt0xfuj64xe3bq/K1_%D0%91%D1%8B%D1%82%D0%BE%D0%B2%D1%8B%D0%B5%20%D0%BA%D0%BE%D0%BD%D0%B4%D0%B8%D1%86%D0%B8%D0%BE%D0%BD%D0%B5%D1%80%D1%8B_2026_DK26-02.01.04_190326_small.pdf
-    type: official
-    checked_at: 2026-08-23
   daichi_multi:
     title: Наружный блок мультисистемы Daichi DF-AM-R
     publisher: Daichi
@@ -141,14 +135,20 @@ topics:
     visual: Фотореалистичный современный интерьер с настенным кондиционером, спокойная комфортная атмосфера, на столе точный бытовой термометр; визуальный акцент на стабильном комфорте без схем и надписей.
     facts:
       - id: inverter-precision
-        text: Инверторная технология повышает точность поддержания температуры.
-        source: daichi_inverter_catalog
-      - id: inverter-noise-energy
-        text: Официальный каталог связывает инверторное управление со снижением шума и расхода электроэнергии.
-        source: daichi_inverter_catalog
-      - id: use-mode-matters
-        text: Выбор между инверторной и обычной моделью зависит от режима и продолжительности использования помещения.
-        source: daichi_inverter_catalog
+        text: Для серии HeatForce заявлено поддержание заданной температуры с отклонением ±0,5 °C.
+        source: daichi_heatforce
+      - id: inverter-dc-vs-ac
+        text: Производитель заявляет энергоэффективность на 20 процентов выше по сравнению с обычными инверторами переменного тока.
+        source: daichi_heatforce
+      - id: inverter-seer-scop
+        text: Сезонные показатели серии достигают SEER 9,2 на охлаждение и SCOP 4,6 на обогрев.
+        source: daichi_heatforce
+      - id: inverter-cooling-range
+        text: Рабочий диапазон на охлаждение заявлен от −15 до +50 °C.
+        source: daichi_heatforce
+      - id: inverter-shoulder-season
+        text: В межсезонье предусмотрен нагрев до 8 °C в режиме поддержания комфортных условий.
+        source: daichi_heatforce
   - id: multi-split-rooms
     category: air_conditioners
     content_type: comparison

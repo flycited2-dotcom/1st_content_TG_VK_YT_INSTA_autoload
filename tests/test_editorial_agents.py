@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import pytest
+import yaml
 
 from content_factory.agents.editorial import (
     IdeaAgent,
@@ -101,3 +102,17 @@ def test_topic_without_a_hook_still_builds_the_old_way():
     """Обратная совместимость: тема без крючка не должна ломаться."""
     text = VkEditorialAgent().write(_idea(), _idea().facts).text
     assert text.startswith("Заголовок темы")
+
+
+def test_every_declared_source_is_actually_cited():
+    """Осиротевший источник — признак того, что он больше ничем не держится.
+
+    Каталог Daichi 2026 начал отдавать 404, и это обнаружилось только при
+    ручной проверке ссылок. Тест ловит обратный случай: источник объявлен,
+    но ни один факт на него не ссылается — значит, его пора убрать.
+    """
+    raw = yaml.safe_load(KNOWLEDGE.read_text(encoding="utf-8"))
+    declared = set(raw["sources"])
+    cited = {fact["source"] for topic in raw["topics"] for fact in topic["facts"]}
+
+    assert declared == cited, f"источники без фактов: {sorted(declared - cited)}"
