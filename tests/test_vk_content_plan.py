@@ -529,3 +529,33 @@ def test_blocked_overdue_returns_to_the_plan_once_a_slot_frees(tmp_path):
     assert result["moved"] == [{"id": stuck, "from": 100, "to": 1000}]
     assert store.get(stuck).status == "planned"
     assert store.get(stuck).due_at == 1000
+
+
+def test_visual_gate_releases_material_once_the_frame_appears(tmp_path):
+    """Шлюз обязан работать в обе стороны.
+
+    Раньше материал без кадра уходил в visual_pending и оставался там даже
+    после того, как изображение появлялось на диске: обратный переход делал
+    только ручной attach_visual. В бою так зависли пять редакционных постов.
+    """
+    assets = tmp_path / "editorial"
+    assets.mkdir()
+    store = VkContentPlanStore(tmp_path / "plan.db")
+    now_ts = int(datetime(2026, 9, 1, 12, 0).timestamp())
+    item_id = store.add(
+        VkPlanCandidate(source_key="editorial:ups-sine-wave:20260911", source_ts=1.0,
+                        caption="Текст поста", card_path="", category="ups",
+                        brand="EDITORIAL", content_type="useful"),
+        now_ts + 3600,
+    )
+
+    # Материал без кадра попадает в шлюз уже при постановке в план.
+    assert store.get(item_id).status == "visual_pending"
+    assert store.require_editorial_visuals(assets) == []
+
+    (assets / "ups-sine-wave.png").write_bytes(b"png")
+
+    assert store.require_editorial_visuals(assets) == [item_id]
+    restored = store.get(item_id)
+    assert restored.status == "planned"
+    assert restored.card_path.endswith("ups-sine-wave.png")

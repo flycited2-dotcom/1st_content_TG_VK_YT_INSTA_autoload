@@ -19,8 +19,12 @@ queue_db = config("FOTOGEN_QUEUE_DB")
 chat = config("FOTOGEN_CHAT_ID", "0")
 headers = {"x-agent-token": config("FOTOGEN_API_TOKEN")}
 
-assets = "/opt/content-factory/assets/generated/editorial"
-ideas, _ = load_ideas("/opt/content-factory/config/vk-editorial-sources.yaml")
+# Планировщик VK запускается с WorkingDirectory=/opt/content-factory-vk,
+# поэтому относительный путь к кадрам разрешается именно там. Класть
+# картинки в соседнее дерево бесполезно: пост останется visual_pending.
+ROOT = "/opt/content-factory-vk"
+assets = f"{ROOT}/assets/generated/editorial"
+ideas, _ = load_ideas(f"{ROOT}/config/vk-editorial-sources.yaml")
 have = {name[:-4] for name in os.listdir(assets) if name.endswith(".png")}
 
 con = sqlite3.connect(f"file:{queue_db}?mode=ro", uri=True)

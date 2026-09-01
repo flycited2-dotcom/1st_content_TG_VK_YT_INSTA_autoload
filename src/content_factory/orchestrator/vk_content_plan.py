@@ -702,24 +702,45 @@ class VkContentPlanStore:
             item_id, ("review",), "review", telegram_message_id=int(message_id),
         )
 
-    def require_editorial_visuals(self) -> list[int]:
-        """Вернуть безвизуальные нетоварные черновики в обязательный визуальный шлюз."""
+    def require_editorial_visuals(
+        self, asset_root: str | Path = "assets/generated/editorial",
+    ) -> list[int]:
+        """Держать нетоварные материалы в визуальном шлюзе — и выпускать из него.
+
+        Шлюз обязан работать в обе стороны. Пока обратный переход делал только
+        ручной attach_visual, материал, отправленный в visual_pending до
+        появления кадра, застревал там навсегда: пять редакционных постов так и
+        стояли, хотя картинки уже лежали на диске.
+        """
         changed = []
         now = int(time.time())
         with self._connect() as connection:
             rows = connection.execute(
-                "SELECT id,card_path FROM vk_content_plan WHERE content_type!='product' "
-                "AND status='planned'"
+                "SELECT id,source_key,card_path,status FROM vk_content_plan "
+                "WHERE content_type!='product' AND status IN ('planned','visual_pending')"
             ).fetchall()
-            for item_id, card_path in rows:
-                if card_path and Path(str(card_path)).is_file():
+            for item_id, source_key, card_path, status in rows:
+                item_id = int(item_id)
+                path = str(card_path or "")
+                if not (path and Path(path).is_file()):
+                    # Кадр мог появиться уже после постановки в план: имя файла
+                    # выводится из темы, поэтому ищем его на диске заново.
+                    idea_id = str(source_key).split(":")[1] if ":" in str(source_key) else ""
+                    path = editorial_asset_path(asset_root, idea_id) if idea_id else ""
+                if path and status == "visual_pending":
+                    cursor = connection.execute(
+                        "UPDATE vk_content_plan SET status='planned',card_path=?,updated_at=? "
+                        "WHERE id=? AND status='visual_pending'", (path, now, item_id),
+                    )
+                elif not path and status == "planned":
+                    cursor = connection.execute(
+                        "UPDATE vk_content_plan SET status='visual_pending',updated_at=? "
+                        "WHERE id=? AND status='planned'", (now, item_id),
+                    )
+                else:
                     continue
-                cursor = connection.execute(
-                    "UPDATE vk_content_plan SET status='visual_pending',updated_at=? "
-                    "WHERE id=? AND status='planned'", (now, int(item_id)),
-                )
                 if cursor.rowcount:
-                    changed.append(int(item_id))
+                    changed.append(item_id)
         return changed
 
     def auto_approve(self, content_types: tuple[str, ...] | None = None) -> list[int]:
