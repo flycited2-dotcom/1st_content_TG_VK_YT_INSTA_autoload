@@ -101,6 +101,16 @@ def load_ideas(path: str | Path) -> tuple[list[Idea], set[str]]:
     return ideas, trusted
 
 
+def select_post_facts(facts: tuple[Fact, ...]) -> tuple[Fact, ...]:
+    """Отобрать пункты, которые реально уходят в пост.
+
+    Функция общая намеренно: тексты собирает и конвейер, и разовая
+    пересборка уже запланированных постов. Разойдись они — в ленте
+    оказались бы посты двух разных форматов.
+    """
+    return tuple(facts)[:MAX_POST_FACTS]
+
+
 class IdeaAgent:
     def choose(self, ideas: list[Idea], used: set[str], limit: int) -> list[Idea]:
         return [idea for idea in ideas if idea.id not in used][:max(0, int(limit))]
@@ -255,7 +265,7 @@ def build_editorial_drafts(path: str | Path, used: set[str], limit: int,
     audit = EditorialAuditStore(audit_db) if audit_db else None
     drafts = []
     for idea in IdeaAgent().choose(ideas, used, limit):
-        facts = research.verify(idea)[:MAX_POST_FACTS]
+        facts = select_post_facts(research.verify(idea))
         draft = editor.write(idea, facts)
         verdict = critic.review(idea, facts, draft)
         if audit:

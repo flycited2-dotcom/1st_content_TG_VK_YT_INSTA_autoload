@@ -9,7 +9,7 @@ import sys
 
 sys.path.insert(0, "/opt/content-factory-vk/src")
 from content_factory.agents.editorial import (  # noqa: E402
-    ResearchAgent, VkEditorialAgent, load_ideas,
+    ResearchAgent, VkEditorialAgent, load_ideas, select_post_facts,
 )
 from content_factory.orchestrator.vk_content_plan import (  # noqa: E402
     VkContentPlanStore, editorial_asset_path,
@@ -34,7 +34,7 @@ for item in targets:
     if idea is None:
         print(f"{item.id} {idea_id}: темы больше нет — пропуск")
         continue
-    text = editor.write(idea, research.verify(idea)).text
+    text = editor.write(idea, select_post_facts(research.verify(idea))).text
     if text == item.caption:
         continue
     path = editorial_asset_path(ASSETS, idea_id)
