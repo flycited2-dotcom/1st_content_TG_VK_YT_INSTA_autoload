@@ -116,3 +116,21 @@ def test_every_declared_source_is_actually_cited():
     cited = {fact["source"] for topic in raw["topics"] for fact in topic["facts"]}
 
     assert declared == cited, f"источники без фактов: {sorted(declared - cited)}"
+
+
+def test_post_keeps_at_most_four_facts_each_in_its_own_paragraph(tmp_path):
+    """Владелец смотрел живую ленту: список шёл сплошняком и читался стеной.
+
+    Ограничение в четыре пункта держит призыв с ссылкой выше сгиба VK, а
+    пустая строка между пунктами делает список сканируемым на телефоне.
+    """
+    drafts = build_editorial_drafts(KNOWLEDGE, set(), 50, tmp_path / "audit.db")
+    assert drafts
+
+    for draft in drafts:
+        assert len(draft.fact_ids) <= 4, f"{draft.idea_id}: пунктов больше четырёх"
+        body = draft.text
+        for index in range(2, len(draft.fact_ids) + 1):
+            assert f"\n\n{index}. " in body, (
+                f"{draft.idea_id}: пункт {index} не отделён пустой строкой"
+            )

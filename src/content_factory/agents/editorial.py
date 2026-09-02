@@ -18,6 +18,10 @@ import yaml
 
 PROHIBITED = ("политик", "выборы", "военн", "санкци", "общественн новост")
 
+# Сколько пунктов уходит в пост. В живой ленте более длинный список
+# читался стеной и утаскивал призыв с ссылкой под «Показать ещё».
+MAX_POST_FACTS = 4
+
 
 @dataclass(frozen=True)
 class Source:
@@ -129,7 +133,9 @@ class VkEditorialAgent:
             "trust": "Как проходит профессиональный подбор:",
         }
         heading = headings.get(idea.content_type, "Что важно проверить:")
-        bullets = "\n".join(
+        # Пустая строка между пунктами: так список сканируется на телефоне.
+        # Пустая строка между пунктами: так список сканируется на телефоне.
+        bullets = "\n\n".join(
             f"{index}. {fact.text}" for index, fact in enumerate(facts, 1)
         )
         sources = []
@@ -144,7 +150,7 @@ class VkEditorialAgent:
         # тело не выводится: он остаётся служебным именем материала.
         opening = idea.hook.strip() or idea.title
         closing = "\n\n".join(part for part in (idea.offer.strip(), idea.cta) if part)
-        text = f"{opening}\n\n{idea.intro}\n\n{heading}\n{bullets}\n\n{closing}"
+        text = f"{opening}\n\n{idea.intro}\n\n{heading}\n\n{bullets}\n\n{closing}"
         return EditorialDraft(
             idea_id=idea.id, category=idea.category, content_type=idea.content_type,
             text=text, fact_ids=tuple(fact.id for fact in facts),
@@ -249,7 +255,7 @@ def build_editorial_drafts(path: str | Path, used: set[str], limit: int,
     audit = EditorialAuditStore(audit_db) if audit_db else None
     drafts = []
     for idea in IdeaAgent().choose(ideas, used, limit):
-        facts = research.verify(idea)
+        facts = research.verify(idea)[:MAX_POST_FACTS]
         draft = editor.write(idea, facts)
         verdict = critic.review(idea, facts, draft)
         if audit:
