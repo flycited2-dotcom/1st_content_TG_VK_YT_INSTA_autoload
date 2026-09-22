@@ -457,14 +457,22 @@ class VkContentPlanStore:
                     continue
                 if free:
                     new_due = free.pop(0)
-                    next_status = status if status in {"visual_pending", "revision_requested"} else "planned"
+                    # Карточку, которую владелец уже видел, оставляем прежней: перенос
+                    # меняет только слот. Раньше review и approved сбрасывались в planned
+                    # с обнулённым сообщением, и диспетчер слал ту же карточку заново —
+                    # за три недели сентября 42 повтора одних и тех же постов.
+                    keep_card = status in {"review", "approved"}
+                    next_status = (status if status in {"visual_pending", "revision_requested",
+                                                        "review", "approved"}
+                                   else "planned")
                     connection.execute(
                         "UPDATE vk_content_plan SET due_at=?,status=?,"
-                        "telegram_message_id=NULL,reminder_sent_at=NULL,updated_at=? "
+                        "telegram_message_id=CASE WHEN ? THEN telegram_message_id END,"
+                        "reminder_sent_at=NULL,updated_at=? "
                         "WHERE id=? AND status IN "
                         "('visual_pending','planned','review','revision_requested',"
                         "'approved','blocked_overdue')",
-                        (new_due, next_status, now, plan_id),
+                        (new_due, next_status, int(keep_card), now, plan_id),
                     )
                     connection.execute(
                         "INSERT INTO vk_plan_events(ts,plan_id,event,old_due_at,new_due_at,details) "
@@ -1043,6 +1051,15 @@ def materialize_plan(store: VkContentPlanStore, candidates: list[VkPlanCandidate
     return added
 
 
+# Сколько дней опубликованная тема не возвращается в план и какие статусы
+# означают, что материал уже был на стене.
+EDITORIAL_REPEAT_DAYS = 90
+PUBLISHED_EDITORIAL_STATUSES = frozenset({
+    "photo_pending", "photo_confirmed", "photo_overdue",
+    "published_unverified", "published",
+})
+
+
 def editorial_asset_path(asset_root: str | Path, idea_id: str) -> str:
     root = Path(asset_root)
     for suffix in (".png", ".jpg", ".jpeg", ".webp"):
@@ -1059,8 +1076,16 @@ def materialize_editorial_plan(store: VkContentPlanStore, knowledge_path: str | 
     occupied = {item.due_at for item in store.list() if item.status in ACTIVE_STATUSES}
     free_slots = [slot for slot in slots if slot not in occupied]
     cutoff = int((now - timedelta(days=14)).timestamp())
+    # Вышедшая на стену тема держится вне плана заметно дольше двух недель:
+    # иначе при малом справочнике она возвращается с той же картинкой, и лента
+    # выглядит однообразно. Лучше пустой слот, чем повтор.
+    published_cutoff = int((now - timedelta(days=EDITORIAL_REPEAT_DAYS)).timestamp())
     used = {item.source_key.split(":")[1] for item in store.list()
-            if item.source_key.startswith("editorial:") and item.due_at >= cutoff}
+            if item.source_key.startswith("editorial:") and (
+                item.due_at >= cutoff
+                or (item.status in PUBLISHED_EDITORIAL_STATUSES
+                    and item.due_at >= published_cutoff)
+            )}
     drafts = build_editorial_drafts(
         knowledge_path, used, len(free_slots), audit_db=store.path,
     )

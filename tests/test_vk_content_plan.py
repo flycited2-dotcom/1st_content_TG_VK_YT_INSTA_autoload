@@ -195,9 +195,10 @@ def test_overdue_repair_moves_unsent_and_closes_photo_states(tmp_path):
     ]
     assert result["published_unverified"] == [confirmed]
     assert result["photo_overdue"] == [pending]
-    assert store.get(review).status == "planned"
-    assert store.get(review).telegram_message_id is None
-    assert store.get(approved).status == "planned"
+    # Показанная карточка и одобрение переживают перенос — повторно не спрашиваем.
+    assert store.get(review).status == "review"
+    assert store.get(review).telegram_message_id == 10
+    assert store.get(approved).status == "approved"
     assert store.get(confirmed).status == "published_unverified"
     assert store.get(pending).status == "photo_overdue"
     assert store.get(future).due_at == 2000
@@ -559,3 +560,57 @@ def test_visual_gate_releases_material_once_the_frame_appears(tmp_path):
     restored = store.get(item_id)
     assert restored.status == "planned"
     assert restored.card_path.endswith("ups-sine-wave.png")
+
+
+def test_overdue_card_already_shown_is_not_sent_to_owner_again(tmp_path):
+    """Карточку, которую владелец уже видел, нельзя присылать повторно.
+
+    Раньше просроченный пост из review уходил обратно в planned с обнулённым
+    telegram_message_id — и диспетчер слал ту же карточку заново. За три
+    недели сентября владелец получил так 42 повтора тех же 24 постов и
+    перестал открывать чат. Одобренный пост по той же причине спрашивали
+    второй раз.
+    """
+    store = VkContentPlanStore(tmp_path / "plan.db")
+    shown = store.add(candidate("shown", "ups", "POWERMAN"), 200)
+    approved = store.add(candidate("approved", "air_conditioners", "XIGMA"), 300)
+    assert store.mark_review(shown, 55)
+    assert store.mark_review(approved, 56) and store.approve(approved)
+
+    store.repair_overdue(600, [1000, 2000])
+
+    kept = store.get(shown)
+    assert kept.status == "review" and kept.telegram_message_id == 55
+    assert kept.due_at == 1000
+    still_approved = store.get(approved)
+    assert still_approved.status == "approved" and still_approved.due_at == 2000
+
+
+def test_published_topic_does_not_return_to_plan_within_ninety_days(tmp_path):
+    """Тема, вышедшая на стену, не должна идти по второму кругу через две недели.
+
+    Раньше «использованной» считалась только тема с due_at за последние 14 дней.
+    В сентябре так вернулись в план clean-ac-filters и stabilizer-measure-first,
+    опубликованные в августе, — с той же картинкой. Владелец увидел в ленте
+    повтор и перестал размещать контент.
+    """
+    knowledge = Path(__file__).parents[1] / "config" / "vk-editorial-sources.yaml"
+    store = VkContentPlanStore(tmp_path / "plan.db")
+    posted_at = datetime(2026, 8, 27, 11, 30)
+    post_id = store.add(VkPlanCandidate(
+        source_key="editorial:clean-ac-filters:20260827", source_ts=1.0,
+        caption="Старый текст о фильтрах", card_path="", category="air_conditioners",
+        brand="EDITORIAL", content_type="service",
+    ), int(posted_at.timestamp()))
+    with sqlite3.connect(store.path) as connection:
+        connection.execute(
+            "UPDATE vk_content_plan SET status='published_unverified',vk_post_id=16 WHERE id=?",
+            (post_id,),
+        )
+
+    three_weeks_later = datetime(2026, 9, 17, 8, 0)
+    materialize_editorial_plan(store, knowledge, three_weeks_later)
+
+    again = [item for item in store.list()
+             if item.source_key.startswith("editorial:clean-ac-filters:") and item.id != post_id]
+    assert again == [], "опубликованная тема вернулась в план через три недели"
