@@ -1123,6 +1123,33 @@ def materialize_editorial_plan(store: VkContentPlanStore, knowledge_path: str | 
     return added
 
 
+_HOOK_AREA_RE = re.compile(r"до\s+([0-9]+)\s*м²")
+_HOOK_PRICE_RE = re.compile(r"💎\s*((?:от\s+)?[0-9][0-9\s\u00a0]*₽)")
+_PRODUCT_HOOKS = (
+    "Комната до {area} м²? Вот кондиционер, который с ней справится — {price}.",
+    "Ищете кондиционер на {area} м²? Смотрите, что есть в наличии: {price}.",
+    "{price} — и кондиционер для комнаты до {area} м² уже в наличии.",
+    "Подбор под {area} м²: вот вариант в наличии, {price}.",
+)
+
+
+def product_hook(source_key: str, caption: str) -> str:
+    """Одна вступительная строка товарного поста из данных его же подписи.
+
+    Пост, который начинается с названия модели, читается как прайс. Строка про
+    комнату и цену открывает его как ответ на вопрос покупателя. Площадь и цена
+    берутся из подписи, а не придумываются; нет любого из значений — крючка нет.
+    """
+    area = _HOOK_AREA_RE.search(caption)
+    price = _HOOK_PRICE_RE.search(caption)
+    if not (area and price):
+        return ""
+    variant = sum(ord(char) for char in str(source_key)) % len(_PRODUCT_HOOKS)
+    return _PRODUCT_HOOKS[variant].format(
+        area=area.group(1), price=re.sub(r"\s+", " ", price.group(1)).strip(),
+    )
+
+
 def review_caption(item: VkPlanItem, limit: int = 1024, *, body: str | None = None) -> str:
     due = datetime.fromtimestamp(item.due_at).strftime("%d.%m.%Y %H:%M")
     category = VK_PLAN_CATEGORY_LABELS.get(item.category, item.category)
@@ -1200,8 +1227,12 @@ def run_cycle(*, store: VkContentPlanStore, source_db: str, telegram_token: str,
         result["auto_approved"] = store.auto_approve()
 
     def publication_caption(item: VkPlanItem) -> tuple[str, str]:
+        caption = item.caption
+        if item.content_type == "product":
+            hook = product_hook(item.source_key, caption)
+            caption = f"{hook}\n\n{caption}" if hook else caption
         return tracked_caption(
-            item.caption, item.id, source_key=item.source_key,
+            caption, item.id, source_key=item.source_key,
             order_bot=order_bot, links=order_links, base_url=site_url,
             catalog_base_url=catalog_site_url,
             editorial_destination=(

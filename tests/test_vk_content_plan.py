@@ -617,3 +617,32 @@ def test_published_topic_does_not_return_to_plan_within_ninety_days(tmp_path):
     again = [item for item in store.list()
              if item.source_key.startswith("editorial:clean-ac-filters:") and item.id != post_id]
     assert again == [], "опубликованная тема вернулась в план через три недели"
+
+
+PRODUCT_CAPTION = (
+    "Daichi Эйр 2 Инвертор\n\n💎 от 25 790 ₽\n\nМодели и цены:\n"
+    "▫️ 09 · 25 790 ₽ · 7 шт.\n\nКлючевые особенности:\n❄️ 9000 BTU · до 25 м²\n"
+)
+
+
+def test_product_hook_speaks_about_the_room_not_the_spec_sheet():
+    """Товарный пост открывается вопросом покупателя, а не названием модели.
+
+    Все цифры берутся из самой подписи — площадь и цена, — поэтому крючок
+    ничего не выдумывает; формулировка варьируется по ключу материала.
+    """
+    from content_factory.orchestrator.vk_content_plan import product_hook
+
+    hook = product_hook("daichi|axioma|h", PRODUCT_CAPTION)
+
+    assert "25 м²" in hook and "25 790 ₽" in hook
+    assert "\n" not in hook
+
+
+def test_product_hook_varies_between_items_and_skips_when_data_is_missing():
+    from content_factory.orchestrator.vk_content_plan import product_hook
+
+    hooks = {product_hook(f"k{index}", PRODUCT_CAPTION) for index in range(12)}
+
+    assert len(hooks) >= 3, "крючки не должны быть одинаковыми у всех товаров"
+    assert product_hook("k", "Терморегулятор\n\n💎 3 819 ₽\n") == ""
