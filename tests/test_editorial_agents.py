@@ -253,3 +253,17 @@ def test_rubrics_take_slots_before_old_checklists():
     picked = IdeaAgent().choose([checklist, rubric, seasonal], set(), 2, month=10)
 
     assert [idea.id for idea in picked] == ["season-1", "new-1"]
+
+
+def test_season_is_checked_against_every_month_of_the_planning_horizon():
+    """30 сентября горизонт в 14 дней уже целиком в октябре.
+
+    Фильтр по месяцу «сегодня» выкинул октябрьские темы из плана именно в
+    последний день сентября: сезонные посты выходили бы с опозданием.
+    """
+    october = _rubric(id="october", format="season", months=(10, 11))
+    winter = _rubric(id="winter", format="season", months=(12, 1))
+
+    picked = IdeaAgent().choose([october, winter], set(), 5, month=(9, 10))
+
+    assert [idea.id for idea in picked] == ["october"]

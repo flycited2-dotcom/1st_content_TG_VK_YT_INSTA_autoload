@@ -129,11 +129,14 @@ def select_post_facts(facts: tuple[Fact, ...]) -> tuple[Fact, ...]:
 
 class IdeaAgent:
     def choose(self, ideas: list[Idea], used: set[str], limit: int,
-               month: int | None = None) -> list[Idea]:
+               month: int | tuple[int, ...] | None = None) -> list[Idea]:
         free = [idea for idea in ideas if idea.id not in used]
         if month is not None:
-            # Не по сезону — не предлагаем.
-            free = [idea for idea in free if not idea.months or month in idea.months]
+            # Месяц — один или несколько: горизонт плана может пересекать границу
+            # месяцев. Не по сезону — не предлагаем.
+            months = {month} if isinstance(month, int) else set(month)
+            free = [idea for idea in free
+                    if not idea.months or months & set(idea.months)]
         # Порядок выдачи: сезонные темы, затем остальные рубрики, затем старые
         # чек-листы. Сортировка устойчива, поэтому внутри группы сохраняется
         # порядок справочника.
@@ -328,7 +331,7 @@ def post_facts(idea: Idea, verified: tuple[Fact, ...]) -> tuple[Fact, ...]:
 
 def build_editorial_drafts(path: str | Path, used: set[str], limit: int,
                            audit_db: str | Path | None = None,
-                           month: int | None = None) -> list[EditorialDraft]:
+                           month: int | tuple[int, ...] | None = None) -> list[EditorialDraft]:
     ideas, trusted = load_ideas(path)
     research = ResearchAgent(trusted)
     editor = VkEditorialAgent()

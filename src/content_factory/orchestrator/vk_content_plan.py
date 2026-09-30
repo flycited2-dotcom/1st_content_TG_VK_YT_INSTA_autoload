@@ -1100,7 +1100,8 @@ def materialize_editorial_plan(store: VkContentPlanStore, knowledge_path: str | 
                     and item.due_at >= published_cutoff)
             )}
     drafts = build_editorial_drafts(
-        knowledge_path, used, len(free_slots), audit_db=store.path, month=now.month,
+        knowledge_path, used, len(free_slots), audit_db=store.path,
+        month=tuple(sorted({now.month, (now + timedelta(days=horizon_days)).month})),
     )
     last = next((item for item in reversed(store.list())
                  if item.status in ACTIVE_STATUSES), None)
