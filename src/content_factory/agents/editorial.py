@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 import time
 from dataclasses import asdict, dataclass
@@ -53,6 +54,15 @@ class Idea:
     # Крючок и предложение — необязательные: тема без них собирается по-старому.
     hook: str = ""
     offer: str = ""
+    # Рубрика поста. «checklist» — прежний шаблон «крючок → пункты → оффер»;
+    # остальные (qa, myth, number, season, poll) — авторский текст в body.
+    format: str = "checklist"
+    body: str = ""
+    # Месяцы, когда тема уместна; пусто — весь год.
+    months: tuple[int, ...] = ()
+    # Крупная цифра и подпись для типографской карточки вместо фотографии.
+    card_big: str = ""
+    card_small: str = ""
 
 
 @dataclass(frozen=True)
@@ -64,6 +74,7 @@ class EditorialDraft:
     fact_ids: tuple[str, ...]
     source_urls: tuple[str, ...]
     visual_prompt: str
+    format: str = "checklist"
 
 
 @dataclass(frozen=True)
@@ -93,10 +104,15 @@ def load_ideas(path: str | Path) -> tuple[list[Idea], set[str]]:
         ideas.append(Idea(
             id=str(item["id"]), category=str(item["category"]),
             content_type=str(item["content_type"]), title=str(item["title"]),
-            intro=str(item["intro"]), cta=str(item["cta"]),
+            intro=str(item.get("intro", "")), cta=str(item.get("cta", "")),
             visual=str(item.get("visual", "")).strip(), facts=tuple(facts),
             hook=str(item.get("hook", "")).strip(),
             offer=str(item.get("offer", "")).strip(),
+            format=str(item.get("format", "checklist")).strip() or "checklist",
+            body=str(item.get("body", "")).strip(),
+            months=tuple(int(m) for m in item.get("months", []) or []),
+            card_big=str(item.get("card_big", "")).strip(),
+            card_small=str(item.get("card_small", "")).strip(),
         ))
     return ideas, trusted
 
@@ -112,8 +128,20 @@ def select_post_facts(facts: tuple[Fact, ...]) -> tuple[Fact, ...]:
 
 
 class IdeaAgent:
-    def choose(self, ideas: list[Idea], used: set[str], limit: int) -> list[Idea]:
-        return [idea for idea in ideas if idea.id not in used][:max(0, int(limit))]
+    def choose(self, ideas: list[Idea], used: set[str], limit: int,
+               month: int | None = None) -> list[Idea]:
+        free = [idea for idea in ideas if idea.id not in used]
+        if month is not None:
+            # Не по сезону — не предлагаем.
+            free = [idea for idea in free if not idea.months or month in idea.months]
+        # Порядок выдачи: сезонные темы, затем остальные рубрики, затем старые
+        # чек-листы. Сортировка устойчива, поэтому внутри группы сохраняется
+        # порядок справочника.
+        free.sort(key=lambda idea: (
+            0 if month is not None and idea.months else 1,
+            1 if idea.format == "checklist" else 0,
+        ))
+        return free[:max(0, int(limit))]
 
 
 class ResearchAgent:
@@ -142,6 +170,14 @@ class VkEditorialAgent:
             "comparison": "Что важно сравнить:",
             "trust": "Как проходит профессиональный подбор:",
         }
+        if idea.body:
+            return EditorialDraft(
+                idea_id=idea.id, category=idea.category, content_type=idea.content_type,
+                text=idea.body, fact_ids=tuple(fact.id for fact in facts),
+                source_urls=tuple(dict.fromkeys(fact.source.url for fact in facts)),
+                visual_prompt=EditorialVisualAgent().build_prompt(idea),
+                format=idea.format,
+            )
         heading = headings.get(idea.content_type, "Что важно проверить:")
         # Пустая строка между пунктами: так список сканируется на телефоне.
         # Пустая строка между пунктами: так список сканируется на телефоне.
@@ -177,6 +213,8 @@ class EditorialVisualAgent:
     """
 
     def build_prompt(self, idea: Idea) -> str:
+        if idea.card_big:
+            return f"Типографская карточка: {idea.card_big} — {idea.card_small}"
         if not idea.visual:
             raise ValueError(f"У темы {idea.id} нет визуального задания")
         return "\n".join([
@@ -204,6 +242,8 @@ class StrictCriticAgent:
         if len(draft.text) > self.max_length:
             reasons.append(f"текст длиннее лимита ({len(draft.text)} > {self.max_length})")
         expected = tuple(fact.id for fact in facts)
+        if idea.body:
+            return self._review_rubric(facts, draft, reasons)
         if not 3 <= len(facts) <= 7:
             reasons.append(
                 f"для законченного поста требуется 3–7 проверенных пунктов, сейчас {len(facts)}"
@@ -220,6 +260,31 @@ class StrictCriticAgent:
         if not draft.visual_prompt:
             reasons.append("нет задания для тематического изображения")
         return CriticVerdict(not reasons, tuple(reasons))
+
+    def _review_rubric(self, facts: tuple[Fact, ...], draft: EditorialDraft,
+                       reasons: list[str]) -> CriticVerdict:
+        """Свободный текст — главный риск выдумки, поэтому проверка жёстче.
+
+        Каждое число в тексте обязано встречаться в одном из фактов темы: так
+        авторская формулировка не может незаметно подменить цифру паспорта.
+        """
+        if not facts:
+            reasons.append("у рубрики нет опорных фактов")
+        if draft.fact_ids != tuple(fact.id for fact in facts):
+            reasons.append("набор фактов редактора не совпадает с исследованием")
+        supported = set().union(*(_numbers(fact.text) for fact in facts)) if facts else set()
+        for number in sorted(_numbers(draft.text) - supported):
+            reasons.append(f"число {number} в тексте не подтверждено фактом")
+        if not draft.source_urls:
+            reasons.append("нет источников")
+        if not draft.visual_prompt:
+            reasons.append("нет задания для тематического изображения")
+        return CriticVerdict(not reasons, tuple(reasons))
+
+
+def _numbers(text: str) -> set[str]:
+    return {value.replace(",", ".") for value in
+            re.findall(r"[0-9]+(?:[.,][0-9]+)?", text)}
 
 
 class EditorialAuditStore:
@@ -256,16 +321,22 @@ class EditorialAuditStore:
             )
 
 
+def post_facts(idea: Idea, verified: tuple[Fact, ...]) -> tuple[Fact, ...]:
+    """Факты, идущие в пост: рубрика опирается на все, чек-лист — на первые четыре."""
+    return tuple(verified) if idea.body else select_post_facts(verified)
+
+
 def build_editorial_drafts(path: str | Path, used: set[str], limit: int,
-                           audit_db: str | Path | None = None) -> list[EditorialDraft]:
+                           audit_db: str | Path | None = None,
+                           month: int | None = None) -> list[EditorialDraft]:
     ideas, trusted = load_ideas(path)
     research = ResearchAgent(trusted)
     editor = VkEditorialAgent()
     critic = StrictCriticAgent(trusted)
     audit = EditorialAuditStore(audit_db) if audit_db else None
     drafts = []
-    for idea in IdeaAgent().choose(ideas, used, limit):
-        facts = select_post_facts(research.verify(idea))
+    for idea in IdeaAgent().choose(ideas, used, limit, month=month):
+        facts = post_facts(idea, research.verify(idea))
         draft = editor.write(idea, facts)
         verdict = critic.review(idea, facts, draft)
         if audit:

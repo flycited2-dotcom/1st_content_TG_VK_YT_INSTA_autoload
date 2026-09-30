@@ -370,16 +370,19 @@ def test_editorial_plan_rebalances_product_only_schedule(tmp_path):
         "visual_pending", "planned", "review", "approved", "photo_pending", "photo_confirmed",
     }]
 
-    # Слотов стало вдвое больше, поэтому в план помещаются все редакционные темы,
-    # а не девять: именно ради этого расписание и уплотняли. Счёт не зашит —
-    # добавление темы в справочник не должно ронять тест.
+    # Слотов два в день, горизонт 14 дней. В план идут темы, уместные в этом
+    # месяце, и не больше, чем свободных слотов: счёт из справочника не зашит.
     from content_factory.agents.editorial import load_ideas
     ideas, _ = load_ideas(knowledge)
-    assert len(added) == len(ideas)
-    assert len(active) == 3 + len(ideas)
+    in_season = [idea for idea in ideas if not idea.months or now.month in idea.months]
+    free_slots = len(plan_slots(now)) - 3
+    assert len(added) == min(len(in_season), free_slots)
+    assert len(active) == 3 + len(added)
     assert sum(item.content_type == "product" for item in active) == 3
-    assert {item.content_type for item in active if item.content_type != "product"} == {
-        "useful", "service", "comparison", "trust",
+    # Рубрики идут вперёд старых чек-листов, поэтому единственный «trust»-чек-лист
+    # может ждать очереди; остальные типы в партии обязаны быть.
+    assert {item.content_type for item in active if item.content_type != "product"} >= {
+        "useful", "service", "comparison",
     }
 
 

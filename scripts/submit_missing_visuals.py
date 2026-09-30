@@ -32,7 +32,9 @@ http = httpx.Client(timeout=60)
 ACTIVE = ("pending", "processing", "claimed", "running")
 
 for idea in ideas:
-    if idea.id in have:
+    # У тем с крупной цифрой карточка рисуется локально (render_text_cards.py),
+    # генератору фото их отправлять не нужно.
+    if idea.id in have or idea.card_big:
         continue
     scene = idea.visual
     row = con.execute(

@@ -28,7 +28,7 @@ from content_factory.publish.vk_text_sync import (
     build_live_caption_map,
     build_vk_climate_text,
 )
-from content_factory.agents.editorial import build_editorial_drafts
+from content_factory.agents.editorial import build_editorial_drafts, load_ideas
 from content_factory.analytics.vk import (
     LOW_RISK_TYPES,
     Publication,
@@ -144,17 +144,30 @@ def choose_candidates(candidates: list[VkPlanCandidate], count: int) -> list[VkP
     return chosen
 
 
-def rotate_editorial_items(items: list, previous_category: str = "") -> list:
-    """Перемешать рубрики детерминированно, не ставя одну категорию подряд."""
+def rotate_editorial_items(items: list, previous_category: str = "",
+                           previous_format: str = "") -> list:
+    """Перемешать материалы детерминированно: не подряд одна рубрика и категория.
+
+    Формат важнее категории: два «вопроса из чата» подряд читаются как один
+    и тот же пост, даже если темы разные. Поэтому сначала ищем материал с
+    другим форматом и другой категорией, затем с другим форматом, затем с
+    другой категорией.
+    """
     pool = list(items)
     chosen = []
-    previous = str(previous_category or "")
+    prev_cat, prev_fmt = str(previous_category or ""), str(previous_format or "")
     while pool:
-        index = next((i for i, item in enumerate(pool)
-                      if getattr(item, "category", "") != previous), 0)
-        item = pool.pop(index)
+        def pick(test):
+            return next((i for i, item in enumerate(pool) if test(item)), None)
+        index = pick(lambda x: getattr(x, "format", "") != prev_fmt
+                     and getattr(x, "category", "") != prev_cat)
+        if index is None:
+            index = pick(lambda x: getattr(x, "format", "") != prev_fmt)
+        if index is None:
+            index = pick(lambda x: getattr(x, "category", "") != prev_cat)
+        item = pool.pop(index if index is not None else 0)
         chosen.append(item)
-        previous = getattr(item, "category", "")
+        prev_cat, prev_fmt = getattr(item, "category", ""), getattr(item, "format", "")
     return chosen
 
 
@@ -1087,11 +1100,15 @@ def materialize_editorial_plan(store: VkContentPlanStore, knowledge_path: str | 
                     and item.due_at >= published_cutoff)
             )}
     drafts = build_editorial_drafts(
-        knowledge_path, used, len(free_slots), audit_db=store.path,
+        knowledge_path, used, len(free_slots), audit_db=store.path, month=now.month,
     )
-    previous = next((item.category for item in reversed(store.list())
-                     if item.status in ACTIVE_STATUSES), "")
-    drafts = rotate_editorial_items(drafts, previous)
+    last = next((item for item in reversed(store.list())
+                 if item.status in ACTIVE_STATUSES), None)
+    formats = {idea.id: idea.format for idea in load_ideas(knowledge_path)[0]}
+    previous_format = ""
+    if last is not None and last.source_key.startswith("editorial:"):
+        previous_format = formats.get(last.source_key.split(":")[1], "")
+    drafts = rotate_editorial_items(drafts, last.category if last else "", previous_format)
     added = []
     for draft, due_at in zip(drafts, free_slots):
         card_path = editorial_asset_path(asset_root, draft.idea_id)

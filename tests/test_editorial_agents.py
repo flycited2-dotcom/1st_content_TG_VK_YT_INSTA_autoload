@@ -27,14 +27,25 @@ def test_editorial_pipeline_builds_only_sourced_non_product_posts(tmp_path):
         "useful", "service", "comparison", "trust",
     }
     assert all(draft.source_urls for draft in drafts)
-    assert all("Use case: photorealistic-natural" in draft.visual_prompt for draft in drafts)
-    assert all("no watermark" in draft.visual_prompt for draft in drafts)
+    # Типографские карточки (цифра, миф, опрос) не рисуются генератором: у них
+    # вместо фотопромпта короткое описание надписи.
+    ideas_by_id = {idea.id: idea for idea in ideas}
+    photos = [d for d in drafts if not ideas_by_id[d.idea_id].card_big]
+    cards = [d for d in drafts if ideas_by_id[d.idea_id].card_big]
+    assert photos and cards
+    assert all("Use case: photorealistic-natural" in draft.visual_prompt for draft in photos)
+    assert all("no watermark" in draft.visual_prompt for draft in photos)
+    assert all(draft.visual_prompt.startswith("Типографская карточка") for draft in cards)
     assert all("Источник:" not in draft.text for draft in drafts)
-    assert all(3 <= len(draft.fact_ids) <= 7 for draft in drafts)
+    checklists = [draft for draft in drafts if draft.format == "checklist"]
+    assert checklists
+    assert all(3 <= len(draft.fact_ids) <= 7 for draft in checklists)
     assert all(
         all(f"{number}. " in draft.text for number in range(1, len(draft.fact_ids) + 1))
-        for draft in drafts
+        for draft in checklists
     )
+    # Рубрики — свободный текст с опорой на факты, без обязательного списка.
+    assert {draft.format for draft in drafts} >= {"qa", "myth", "number", "season", "poll"}
 
 
 def test_idea_agent_does_not_repeat_used_topic():
@@ -127,10 +138,118 @@ def test_post_keeps_at_most_four_facts_each_in_its_own_paragraph(tmp_path):
     drafts = build_editorial_drafts(KNOWLEDGE, set(), 50, tmp_path / "audit.db")
     assert drafts
 
-    for draft in drafts:
+    for draft in (d for d in drafts if d.format == "checklist"):
         assert len(draft.fact_ids) <= 4, f"{draft.idea_id}: пунктов больше четырёх"
         body = draft.text
         for index in range(2, len(draft.fact_ids) + 1):
             assert f"\n\n{index}. " in body, (
                 f"{draft.idea_id}: пункт {index} не отделён пустой строкой"
             )
+
+
+# ── Рубрики: живые форматы вместо одного шаблона «крючок → чек-лист» ─────────────
+
+RUBRIC_BODY = (
+    "— Кондиционер журчит, как чайник. Он сломался?\n\n"
+    "Нет. Производитель объясняет это перетеканием жидкости в контуре.\n\n"
+    "Слышите другой звук? Напишите в комментариях."
+)
+
+
+def _rubric(**over):
+    base = dict(format="qa", body=RUBRIC_BODY)
+    base.update(over)
+    return _idea(**base)
+
+
+def test_rubric_post_is_the_authored_body_without_a_checklist():
+    idea = _rubric()
+    text = VkEditorialAgent().write(idea, idea.facts).text
+
+    assert text == RUBRIC_BODY
+    assert "Что важно проверить" not in text and "1. " not in text
+
+
+def test_rubric_draft_carries_its_format_for_rotation():
+    idea = _rubric(format="myth")
+    assert VkEditorialAgent().write(idea, idea.facts).format == "myth"
+
+
+def test_critic_accepts_rubric_whose_numbers_come_from_facts():
+    from content_factory.agents.editorial import Fact
+    idea = _rubric(
+        body="Ночью установка шумит не более 20 дБ(А). Слышно ли её у вас?",
+        facts=(Fact("f1", "В ночном режиме шум не более 20 дБ(А).",
+                    _idea().facts[0].source),),
+    )
+    facts = ResearchAgent({"daikin.ru"}).verify(idea)
+    draft = VkEditorialAgent().write(idea, facts)
+
+    assert StrictCriticAgent({"daikin.ru"}).review(idea, facts, draft).ok
+
+
+def test_critic_blocks_rubric_number_that_no_fact_supports():
+    """Свободный текст — главный риск выдумки: цифра без факта не проходит."""
+    idea = _rubric(body="Установка шумит не более 15 дБ(А). А у вас что слышно?")
+    facts = ResearchAgent({"daikin.ru"}).verify(idea)
+    draft = VkEditorialAgent().write(idea, facts)
+
+    verdict = StrictCriticAgent({"daikin.ru"}).review(idea, facts, draft)
+
+    assert not verdict.ok
+    assert any("15" in reason for reason in verdict.reasons)
+
+
+def test_idea_agent_offers_in_season_topics_first_and_skips_out_of_season():
+    winter = _idea(id="winter", months=(12, 1, 2))
+    autumn = _idea(id="autumn", months=(9, 10))
+    always = _idea(id="always")
+
+    picked = IdeaAgent().choose([winter, always, autumn], set(), 5, month=10)
+
+    assert [idea.id for idea in picked] == ["autumn", "always"]
+
+
+def test_rotation_does_not_put_the_same_format_twice_in_a_row():
+    from content_factory.orchestrator.vk_content_plan import rotate_editorial_items
+
+    class Item:
+        def __init__(self, name, category, fmt):
+            self.name, self.category, self.format = name, category, fmt
+
+    items = [Item("a", "ups", "qa"), Item("b", "ups", "qa"), Item("c", "ventilation", "qa"),
+             Item("d", "ups", "myth"), Item("e", "stabilizers", "number")]
+
+    order = rotate_editorial_items(items, previous_category="", previous_format="qa")
+
+    assert order[0].format != "qa"
+    # Пока в пуле есть другой формат, подряд одинаковые не встают.
+    for index in range(len(order) - 1):
+        rest = {item.format for item in order[index + 1:]}
+        if rest - {order[index].format}:
+            assert order[index + 1].format != order[index].format
+
+
+def test_text_card_is_rendered_as_a_square_png(tmp_path):
+    from PIL import Image
+    from content_factory.content.text_card import render_text_card
+
+    path = render_text_card("20 дБ(А)", "Ночной шум приточки ZEAV 135", tmp_path / "card.png")
+
+    with Image.open(path) as image:
+        assert image.size == (1080, 1080)
+
+
+def test_rubrics_take_slots_before_old_checklists():
+    """Чек-листы стоят в справочнике первыми, но лента не должна быть ими забита.
+
+    Владелец: «одни и те же сообщения, аж противно». При нехватке слотов
+    предпочтение отдаётся рубрикам, а чек-листы добираются по остатку.
+    """
+    checklist = _idea(id="old-1")
+    rubric = _rubric(id="new-1", format="myth")
+    seasonal = _rubric(id="season-1", format="season", months=(10,))
+
+    picked = IdeaAgent().choose([checklist, rubric, seasonal], set(), 2, month=10)
+
+    assert [idea.id for idea in picked] == ["season-1", "new-1"]
