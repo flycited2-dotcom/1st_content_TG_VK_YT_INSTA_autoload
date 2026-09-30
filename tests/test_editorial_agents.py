@@ -267,3 +267,18 @@ def test_season_is_checked_against_every_month_of_the_planning_horizon():
     picked = IdeaAgent().choose([october, winter], set(), 5, month=(9, 10))
 
     assert [idea.id for idea in picked] == ["october"]
+
+
+def test_long_question_wraps_inside_the_margins(tmp_path):
+    """Вопрос из чата — фраза, а не цифра: она переносится, а не уезжает за край."""
+    from PIL import Image
+    from content_factory.content.text_card import ACCENT, SIZE, render_text_card
+
+    path = render_text_card("Из рекуператора капает вода", "Брак или так и должно быть?",
+                            tmp_path / "q.png", kicker="Вопрос из чата")
+
+    with Image.open(path) as image:
+        assert image.size == (SIZE, SIZE)
+        pixels = image.load()
+        right_margin = [pixels[x, y] for x in range(SIZE - 70, SIZE) for y in range(0, SIZE, 4)]
+        assert ACCENT not in right_margin, "крупный текст вылез за правое поле"

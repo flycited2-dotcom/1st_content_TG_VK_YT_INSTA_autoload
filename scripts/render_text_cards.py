@@ -15,7 +15,8 @@ sys.path.insert(0, str(Path(__file__).parents[1] / "src"))
 from content_factory.agents.editorial import load_ideas  # noqa: E402
 from content_factory.content.text_card import render_text_card  # noqa: E402
 
-KICKERS = {"number": "Цифра дня", "myth": "Миф или правда", "poll": "Вопрос недели"}
+KICKERS = {"number": "Цифра дня", "myth": "Миф или правда", "poll": "Вопрос недели",
+           "qa": "Вопрос из чата"}
 
 
 def main() -> int:
