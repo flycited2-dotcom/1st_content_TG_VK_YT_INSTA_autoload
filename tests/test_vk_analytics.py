@@ -106,14 +106,33 @@ def test_metrics_client_collects_post_and_optional_reach(tmp_path):
     }
 
 
-def test_autonomy_defaults_l1_and_stops_after_three_failed_cycles(tmp_path):
+def test_autonomy_defaults_l1_and_stops_after_six_failed_cycles(tmp_path):
+    """Шаг планировщика 5 минут: шесть ошибок подряд — те же полчаса терпения.
+
+    При шаге в 30 минут хватало трёх циклов (полтора часа). Перейдя на 5 минут, тот
+    же порог в три цикла остановил бы публикации после 15 минут сетевого сбоя.
+    """
+    from content_factory.analytics.vk import AUTO_STOP_FAILED_CYCLES
+
     store = VkAnalyticsStore(tmp_path / "plan.db")
-    assert store.level() == "L1"
+    assert store.level() == "L1" and AUTO_STOP_FAILED_CYCLES == 6
     store.set_level("L2", now=100)
-    assert not store.record_cycle(1, now=101)
-    assert not store.record_cycle(1, now=102)
-    assert store.record_cycle(1, now=103)
+    for step in range(1, AUTO_STOP_FAILED_CYCLES):
+        assert not store.record_cycle(1, now=100 + step)
+    assert store.level() == "L2", "до порога уровень не трогаем"
+    assert store.record_cycle(1, now=200)
     assert store.level() == "L0"
+
+
+def test_one_clean_cycle_resets_the_failure_streak(tmp_path):
+    store = VkAnalyticsStore(tmp_path / "plan.db")
+    store.set_level("L2", now=100)
+    for step in range(5):
+        store.record_cycle(1, now=101 + step)
+    store.record_cycle(0, now=110)
+    for step in range(5):
+        assert not store.record_cycle(1, now=120 + step)
+    assert store.level() == "L2"
 
 
 def test_l3_requires_fourteen_clean_days(tmp_path):

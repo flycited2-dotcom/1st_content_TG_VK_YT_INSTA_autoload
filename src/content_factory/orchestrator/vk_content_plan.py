@@ -1510,7 +1510,7 @@ def main(argv: list[str] | None = None) -> int:
         send_message(
             config("TELEGRAM_BOT_TOKEN", default=""),
             config("TELEGRAM_REVIEW_CHANNEL_ID", default=""),
-            "⛔ VK-контент-завод автоматически переведён в L0 после трёх "
+            "⛔ VK-контент-завод автоматически переведён в L0 после шести "
             "ошибочных циклов подряд. Публикации остановлены до проверки.",
         )
     print(json.dumps(result, ensure_ascii=False))

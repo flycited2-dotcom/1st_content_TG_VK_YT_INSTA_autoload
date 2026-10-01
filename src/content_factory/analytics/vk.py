@@ -20,6 +20,9 @@ from content_factory.publish.vk import VK_API, VK_MESSAGE_MAX, adapt_vk_text
 
 
 LEVELS = ("L0", "L1", "L2", "L3")
+# Сколько ошибочных циклов подряд останавливают публикации. Планировщик запускается
+# раз в 5 минут, поэтому шесть циклов — полчаса терпения; при шаге в 30 минут хватало трёх.
+AUTO_STOP_FAILED_CYCLES = 6
 LOW_RISK_TYPES = ("useful", "service", "trust")
 
 EDITORIAL_CATALOG_DESTINATIONS = {
@@ -198,7 +201,7 @@ class VkAnalyticsStore:
         return oldest is not None and int(oldest) <= cutoff and int(failures) == 0
 
     def record_cycle(self, error_count: int, *, now: int | None = None) -> bool:
-        """Вернуть True, если три ошибки подряд впервые принудительно включили L0."""
+        """Вернуть True, если серия ошибочных циклов впервые принудительно включила L0."""
         ts = int(now or time.time())
         with self._connect() as connection:
             connection.execute(
@@ -206,9 +209,11 @@ class VkAnalyticsStore:
                 (ts, int(int(error_count) == 0), int(error_count)),
             )
             recent = connection.execute(
-                "SELECT ok FROM vk_cycle_health ORDER BY ts DESC,rowid DESC LIMIT 3",
+                "SELECT ok FROM vk_cycle_health ORDER BY ts DESC,rowid DESC LIMIT ?",
+                (AUTO_STOP_FAILED_CYCLES,),
             ).fetchall()
-        if len(recent) == 3 and all(int(row[0]) == 0 for row in recent) and self.level() != "L0":
+        if (len(recent) == AUTO_STOP_FAILED_CYCLES and all(int(row[0]) == 0 for row in recent)
+                and self.level() != "L0"):
             self.set_level("L0", now=ts)
             return True
         return False
