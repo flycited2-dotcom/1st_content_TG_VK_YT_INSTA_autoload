@@ -128,3 +128,23 @@ def test_snapshot_rows_become_retail_catalog_items(tmp_path):
     assert first.group == "ac" and first.brand == "xigma"
     assert heat.attrs["Тепловой насос"] == "Да"
     assert heat.attrs["Минимальная температура обогрева"] == "−15 °C"
+
+
+def test_site_descriptions_arrive_as_escaped_html_and_are_cleaned(tmp_path):
+    """В базе сайта описание хранится с экранированной разметкой: &lt;p&gt;…&lt;/p&gt;.
+
+    Без очистки у приточек не находилось ни одного предложения, и вентиляция
+    целиком выпадала из ленты как «пустая».
+    """
+    path = tmp_path / "snap.json"
+    html = ("&lt;p&gt;Приточная установка подаёт свежий воздух в помещение площадью до 37 м2.&lt;/p&gt;"
+            "&lt;ul&gt;&lt;li&gt;Три ступени очистки воздуха.&lt;/li&gt;&lt;/ul&gt;&amp;nbsp;")
+    path.write_text(json.dumps([_row(1, description=html, category="Бытовые вентиляционные установки",
+                                     title="Приточная установка BREZZA X", price=25000)],
+                               ensure_ascii=False), encoding="utf-8")
+
+    item = load_snapshot(path)[0]
+
+    assert "<" not in item.prose and "&lt;" not in item.prose and "&nbsp;" not in item.prose
+    assert "Приточная установка подаёт свежий воздух" in item.prose
+    assert "Три ступени очистки воздуха." in item.prose

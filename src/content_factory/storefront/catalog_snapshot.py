@@ -8,8 +8,10 @@
 """
 from __future__ import annotations
 
+import html
 import json
 import os
+import re
 import subprocess
 import time
 from pathlib import Path
@@ -75,6 +77,22 @@ def refresh_snapshot(path: str | Path, *, max_age_hours: float = 20,
     return {"status": "refreshed", "items": len(rows)}
 
 
+_BREAKS = re.compile(r"</?(?:p|br|li|ul|ol|div|h[1-6]|tr)[^>]*>", re.I)
+_TAGS = re.compile(r"<[^>]+>")
+
+
+def clean_html(raw: str) -> str:
+    """Описание на сайте хранится с экранированной разметкой: &lt;p&gt;…&lt;/p&gt;.
+
+    Абзацы и пункты становятся строками, остальные теги отбрасываются.
+    """
+    newline = chr(10)
+    text = html.unescape(raw or "")
+    text = _BREAKS.sub(newline, text)
+    text = html.unescape(_TAGS.sub("", text)).replace(chr(0xA0), " ")
+    return newline.join(line.strip() for line in text.splitlines() if line.strip())
+
+
 def load_snapshot(path: str | Path) -> list[CatalogItem]:
     """Строки снимка → позиции каталога, годные для розничной ленты."""
     rows = json.loads(Path(path).read_text(encoding="utf-8"))
@@ -85,7 +103,7 @@ def load_snapshot(path: str | Path) -> list[CatalogItem]:
         price = int(row.get("price") or 0)
         if not (row.get("slug") and row.get("picture") and retail_ok(category, name, price)):
             continue
-        prose, attrs = parse_description(row.get("description", ""))
+        prose, attrs = parse_description(clean_html(row.get("description", "")))
         attrs.update({str(k): str(v) for k, v in (row.get("specs") or {}).items()})
         if row.get("is_heat_pump"):
             attrs["Тепловой насос"] = "Да"
