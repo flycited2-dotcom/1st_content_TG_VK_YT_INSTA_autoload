@@ -219,3 +219,12 @@ def test_heater_subtypes_get_their_own_hooks():
     assert "пушк" in gun.split("\n")[0].casefold()
     assert "условия эксплуатации" not in write_post(
         _item(prose="Условия эксплуатации: температура окружающего воздуха от -20 °С до +40 °С."))
+
+
+def test_every_site_category_with_stock_lands_in_a_group():
+    """Названия категорий на сайте и в старой выгрузке разные: «Тёплый пол» и «Тёплые полы»."""
+    from content_factory.storefront.product_posts import group_of
+
+    assert group_of("Тёплый пол") == "floor" and group_of("Тёплые полы") == "floor"
+    assert group_of("Накопительные водонагреватели") == "water"
+    assert group_of("Воздухоочистители") == "air"
