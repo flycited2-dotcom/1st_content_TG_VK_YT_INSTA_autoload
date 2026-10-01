@@ -1,0 +1,153 @@
+"""Календарь товарных постов VK из каталога в наличии.
+
+Слоты чередуются: товар — экспертный пост — товар… Для товарного слота группа
+(кондиционеры, обогрев, вентиляция…) берётся из сезонных весов, затем выбирается
+конкретная позиция, чья страница на сайте открывается и показывает «в наличии».
+Все данные в посте — цена, наличие, ссылка — проверены на живой странице.
+"""
+from __future__ import annotations
+
+import re
+from datetime import datetime, timedelta
+from pathlib import Path
+from urllib.parse import quote
+
+import httpx
+
+from content_factory.orchestrator.vk_content_plan import (
+    ACTIVE_STATUSES,
+    VkContentPlanStore,
+    VkPlanCandidate,
+    plan_slots,
+    slot_kind,
+    slot_ordinal,
+)
+from content_factory.storefront.product_posts import (
+    PRICE_CAP,
+    CatalogItem,
+    group_for_slot,
+    live_check,
+    money,
+    pick_item,
+    prepare_photo,
+    write_post,
+)
+
+CATALOG_PREFIX = "catalog:"
+GROUP_CATEGORY = {
+    "ac": "air_conditioners", "vent": "ventilation", "air": "air_care",
+    "heater": "heaters", "radiator": "heating", "water": "water_heaters",
+    "floor": "floor_heating",
+}
+UTM = "utm_source=vk&utm_medium=organic_social&utm_campaign=catalog_post&utm_content={cid}"
+REPEAT_DAYS = 120
+ATTEMPTS_PER_SLOT = 12
+_LINK = re.compile(r"https://splithome\.ru/product/[^\s]+")
+_PRICE_LINE = re.compile(r"(💎 )([0-9][0-9 ]*)( ₽)")
+
+
+def link_line(item: CatalogItem) -> str:
+    cid = quote(item.id, safe="")
+    separator = "&" if "?" in item.url else "?"
+    return f"🛒 Смотреть и заказать: {item.url}{separator}{UTM.format(cid=cid)}"
+
+
+def build_caption(item: CatalogItem, price: int) -> str:
+    return f"{write_post(item, price)}\n\n{link_line(item)}"
+
+
+def _safe(name: str) -> str:
+    return re.sub(r"[^A-Za-z0-9_-]", "_", name)
+
+
+def materialize_catalog_plan(store: VkContentPlanStore, items: list[CatalogItem],
+                             now: datetime, client: httpx.Client, photo_dir: str | Path,
+                             horizon_days: int = 14, fill_editorial_gaps: bool = True,
+                             fetch=live_check, photo=prepare_photo) -> list[int]:
+    """Заполнить свободные товарные слоты; незаполненные экспертные — по желанию."""
+    plan = store.list()
+    occupied = {item.due_at for item in plan if item.status in ACTIVE_STATUSES}
+    cutoff = int((now - timedelta(days=REPEAT_DAYS)).timestamp())
+    taken = {item.source_key[len(CATALOG_PREFIX):] for item in plan
+             if item.source_key.startswith(CATALOG_PREFIX) and item.due_at >= cutoff}
+    recent = [item.brand.casefold() for item in sorted(plan, key=lambda x: x.due_at)
+              if item.content_type == "product"][-2:]
+    skipped: set[str] = set()
+    added: list[int] = []
+    photo_dir = Path(photo_dir)
+
+    for due_at in plan_slots(now, horizon_days=horizon_days):
+        if due_at in occupied:
+            continue
+        if slot_kind(due_at) != "product" and not fill_editorial_gaps:
+            continue
+        ordinal = slot_ordinal(due_at)
+        group = group_for_slot(ordinal, datetime.fromtimestamp(due_at).date())
+        for _ in range(ATTEMPTS_PER_SLOT):
+            item = pick_item(items, group, taken | skipped, recent, salt=str(ordinal))
+            if item is None:
+                break
+            live = fetch(client, item)
+            if live is None or not live.in_stock or not 0 < live.price <= PRICE_CAP[item.group]:
+                skipped.add(item.id)
+                continue
+            image = photo_dir / f"{_safe(item.id)}.jpg"
+            if not image.is_file() and photo(client, item.picture, image) is None:
+                skipped.add(item.id)
+                continue
+            candidate = VkPlanCandidate(
+                source_key=f"{CATALOG_PREFIX}{item.id}", source_ts=float(due_at),
+                caption=build_caption(item, live.price), card_path=str(image.resolve()),
+                category=GROUP_CATEGORY[item.group], brand=item.brand.upper(),
+                content_type="product",
+            )
+            item_id = store.add(candidate, due_at)
+            taken.add(item.id)
+            if item_id is None:  # дубль по отпечатку текста — берём следующую позицию
+                continue
+            added.append(item_id)
+            recent = (recent + [item.brand.casefold()])[-2:]
+            occupied.add(due_at)
+            break
+    return added
+
+
+def refresh_catalog_items(store: VkContentPlanStore, client: httpx.Client, now: datetime,
+                          hours: int = 72, fetch_url=None) -> dict[str, list[int]]:
+    """Перед публикацией ещё раз сверить ближайшие посты с живой страницей.
+
+    Нет в наличии — снимаем; изменилась цена — обновляем текст и возвращаем на ревью,
+    чтобы владелец не одобрял одну цену, а на стену уходила другая.
+    """
+    from content_factory.storefront.product_posts import parse_live
+
+    def default_fetch(url: str):
+        try:
+            response = client.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=25)
+        except httpx.HTTPError:
+            return None
+        return parse_live(response.text) if response.status_code == 200 else None
+
+    fetch_url = fetch_url or default_fetch
+    result = {"blocked": [], "repriced": []}
+    upper = int((now + timedelta(hours=hours)).timestamp())
+    for item in store.list():
+        if not (item.source_key.startswith(CATALOG_PREFIX)
+                and item.status in {"planned", "review", "approved"}
+                and int(now.timestamp()) < item.due_at <= upper):
+            continue
+        link = _LINK.search(item.caption)
+        live = fetch_url(link.group(0).split("?")[0]) if link else None
+        if live is None:  # сеть или разметка подвели — не решаем за сайт
+            continue
+        if not live.in_stock:
+            if store._transition(item.id, ("planned", "review", "approved"), "blocked_unavailable"):
+                result["blocked"].append(item.id)
+            continue
+        current = _PRICE_LINE.search(item.caption)
+        if current and int(current.group(2).replace(" ", "")) != live.price:
+            fresh = _PRICE_LINE.sub(lambda m: f"{m.group(1)}{money(live.price)[:-2]}{m.group(3)}",
+                                    item.caption, count=1)
+            if store.update_caption(item.id, fresh):
+                result["repriced"].append(item.id)
+    return result

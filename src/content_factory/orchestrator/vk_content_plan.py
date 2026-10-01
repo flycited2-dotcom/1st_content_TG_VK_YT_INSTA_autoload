@@ -618,6 +618,21 @@ class VkContentPlanStore:
             self.resolve_revision(item_id)
         return changed
 
+    def update_caption(self, item_id: int, caption: str) -> bool:
+        """Заменить текст ещё не опубликованного поста; показанный или одобренный
+        возвращается на ревью, иначе владелец одобрил бы один текст, а вышел другой."""
+        item = self.get(item_id)
+        if item is None or item.status not in {"planned", "review", "approved"}:
+            return False
+        now = int(time.time())
+        with self._connect() as connection:
+            cursor = connection.execute(
+                "UPDATE vk_content_plan SET caption=?,status='planned',"
+                "telegram_message_id=NULL,updated_at=? WHERE id=? AND status=?",
+                (caption, now, item_id, item.status),
+            )
+        return bool(cursor.rowcount)
+
     def update_editorial_content(self, item_id: int, caption: str,
                                  card_path: str | Path, *,
                                  content_type: str | None = None,
@@ -1082,10 +1097,23 @@ def editorial_asset_path(asset_root: str | Path, idea_id: str) -> str:
     return ""
 
 
+def slot_ordinal(due_at: int) -> int:
+    moment = datetime.fromtimestamp(due_at)
+    return moment.date().toordinal() * 2 + (1 if moment.hour >= 15 else 0)
+
+
+def slot_kind(due_at: int) -> str:
+    """Каждый второй слот — товарный: ровно половина ленты, время суток чередуется."""
+    return "product" if slot_ordinal(due_at) % 2 == 0 else "editorial"
+
+
 def materialize_editorial_plan(store: VkContentPlanStore, knowledge_path: str | Path,
                                now: datetime, horizon_days: int = 14,
-                               asset_root: str | Path = "assets/generated/editorial") -> list[int]:
+                               asset_root: str | Path = "assets/generated/editorial",
+                               only_editorial_slots: bool = False) -> list[int]:
     slots = plan_slots(now, horizon_days=horizon_days)
+    if only_editorial_slots:
+        slots = [slot for slot in slots if slot_kind(slot) == "editorial"]
     occupied = {item.due_at for item in store.list() if item.status in ACTIVE_STATUSES}
     free_slots = [slot for slot in slots if slot not in occupied]
     cutoff = int((now - timedelta(days=14)).timestamp())
@@ -1194,7 +1222,9 @@ def run_cycle(*, store: VkContentPlanStore, source_db: str, telegram_token: str,
               order_links: OrderLinks | None = None, order_bot: str = "Sendpr1ce_bot",
               site_url: str = "https://splithome.ru/",
               catalog_site_url: str = "https://climat-simf.ru/",
-              editorial_service_cta_enabled: bool = False) -> dict:
+              editorial_service_cta_enabled: bool = False,
+              catalog_dir: str | Path | None = None,
+              catalog_photo_dir: str | Path = "assets/generated/products") -> dict:
     client = http or httpx.Client(timeout=60)
     result = {"planned": [], "auto_approved": [], "reviewed": [], "scheduled": [],
               "reminded": [], "visual_pending": [], "rebalanced": [],
@@ -1210,13 +1240,30 @@ def run_cycle(*, store: VkContentPlanStore, source_db: str, telegram_token: str,
         result["errors"].append(f"overdue_repair_failed: {exc}")
 
     try:
-        live_captions = build_live_caption_map()
-        candidates = load_candidates(source_db, live_captions)
-        result["planned"] = materialize_plan(store, candidates, now)
-        if Path(editorial_knowledge).is_file():
-            result["planned"].extend(materialize_editorial_plan(
-                store, editorial_knowledge, now,
+        catalog_mode = bool(catalog_dir) and Path(catalog_dir).is_dir()
+        if catalog_mode:
+            # Товары идут из каталога в наличии с проверкой живой страницы; старый
+            # источник (готовые карточки) отключён: его списочные подписи не продавали.
+            from content_factory.orchestrator.vk_catalog_plan import (
+                materialize_catalog_plan, refresh_catalog_items,
+            )
+            from content_factory.storefront.product_posts import load_catalog
+            result["catalog_refresh"] = refresh_catalog_items(store, client, now)
+            if Path(editorial_knowledge).is_file():
+                result["planned"].extend(materialize_editorial_plan(
+                    store, editorial_knowledge, now, only_editorial_slots=True,
+                ))
+            result["planned"].extend(materialize_catalog_plan(
+                store, load_catalog(catalog_dir), now, client, catalog_photo_dir,
             ))
+        else:
+            live_captions = build_live_caption_map()
+            candidates = load_candidates(source_db, live_captions)
+            result["planned"] = materialize_plan(store, candidates, now)
+            if Path(editorial_knowledge).is_file():
+                result["planned"].extend(materialize_editorial_plan(
+                    store, editorial_knowledge, now,
+                ))
         result["visual_pending"] = store.require_editorial_visuals()
         result["rebalanced"] = store.rebalance_editorial_queue(int(now.timestamp()))
     except Exception as exc:  # каталог недоступен: не планируем материал со старой ценой
@@ -1229,7 +1276,8 @@ def run_cycle(*, store: VkContentPlanStore, source_db: str, telegram_token: str,
 
     def publication_caption(item: VkPlanItem) -> tuple[str, str]:
         caption = item.caption
-        if item.content_type == "product":
+        # Каталожный пост уже открывается своим крючком и несёт ссылку на карточку.
+        if item.content_type == "product" and not item.source_key.startswith("catalog:"):
             hook = product_hook(item.source_key, caption)
             caption = f"{hook}\n\n{caption}" if hook else caption
         return tracked_caption(
@@ -1375,6 +1423,7 @@ def main(argv: list[str] | None = None) -> int:
         editorial_service_cta_enabled=(
             os.getenv("VK_EDITORIAL_SERVICE_CTA_ENABLED", "1") == "1"
         ),
+        catalog_dir=os.getenv("VK_CATALOG_DIR", "") or None,
     )
     auto_stopped = analytics.record_cycle(len(result["errors"]))
     result["auto_stopped"] = auto_stopped
