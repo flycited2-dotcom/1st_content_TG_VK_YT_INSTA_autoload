@@ -1267,7 +1267,8 @@ def run_cycle(*, store: VkContentPlanStore, source_db: str, telegram_token: str,
               catalog_site_url: str = "https://climat-simf.ru/",
               editorial_service_cta_enabled: bool = False,
               catalog_dir: str | Path | None = None,
-              catalog_photo_dir: str | Path = "assets/generated/products") -> dict:
+              catalog_photo_dir: str | Path = "assets/generated/products",
+              catalog_snapshot: str | Path | None = None) -> dict:
     client = http or httpx.Client(timeout=60)
     result = {"planned": [], "auto_approved": [], "reviewed": [], "scheduled": [],
               "reminded": [], "visual_pending": [], "rebalanced": [],
@@ -1288,10 +1289,11 @@ def run_cycle(*, store: VkContentPlanStore, source_db: str, telegram_token: str,
             # Товары идут из каталога в наличии с проверкой живой страницы; старый
             # источник (готовые карточки) отключён: его списочные подписи не продавали.
             from content_factory.orchestrator.vk_catalog_plan import (
-                materialize_catalog_plan, refresh_catalog_items,
+                load_catalog_items, materialize_catalog_plan, refresh_catalog_items,
             )
-            from content_factory.storefront.product_posts import load_catalog
             result["catalog_refresh"] = refresh_catalog_items(store, client, now)
+            catalog_items, result["catalog_source"] = load_catalog_items(
+                catalog_dir, catalog_snapshot)
             topic_rank = {}
             if Path(editorial_knowledge).is_file():
                 for idea in load_ideas(editorial_knowledge)[0]:
@@ -1305,7 +1307,7 @@ def run_cycle(*, store: VkContentPlanStore, source_db: str, telegram_token: str,
                     store, editorial_knowledge, now, only_editorial_slots=True,
                 ))
             result["planned"].extend(materialize_catalog_plan(
-                store, load_catalog(catalog_dir), now, client, catalog_photo_dir,
+                store, catalog_items, now, client, catalog_photo_dir,
             ))
         else:
             live_captions = build_live_caption_map()
@@ -1475,6 +1477,7 @@ def main(argv: list[str] | None = None) -> int:
             os.getenv("VK_EDITORIAL_SERVICE_CTA_ENABLED", "1") == "1"
         ),
         catalog_dir=os.getenv("VK_CATALOG_DIR", "") or None,
+        catalog_snapshot=os.getenv("VK_CATALOG_SNAPSHOT", "state/catalog-snapshot.json"),
     )
     auto_stopped = analytics.record_cycle(len(result["errors"]))
     result["auto_stopped"] = auto_stopped

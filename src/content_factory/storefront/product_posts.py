@@ -55,7 +55,7 @@ _SERIES_SENTENCE = re.compile(
 # Промышленные и нестандартные позиции — не для розничной группы.
 _NOT_FOR_RETAIL_NAME = re.compile(
     r"канальн|кассетн|колонн|потолочн|антивандал|IP ?54|внутрипольн|промышл|ECO ?[0-9]{3}", re.I)
-_NOT_FOR_RETAIL_CATEGORY = re.compile(r"полупромышленн|компактные моноблочные", re.I)
+_NOT_FOR_RETAIL_CATEGORY = re.compile(r"полупромышленн|компактные моноблочные|мульти", re.I)
 # Аксессуары и расходники: в «Кондиционерах» нагреватель дренажа за 593 ₽ — не витрина.
 _ACCESSORY_NAME = re.compile(
     r"дренаж|кронштейн|пульт|сифон|трубк|крепеж|крепёж|фреон|хладагент|помп[аы]|насос|"
@@ -77,6 +77,7 @@ BOOL_FEATURES = (
     (re.compile(r"самодиагностик", re.I), "Самодиагностика неисправностей"),
 )
 VALUE_FEATURES = (
+    (re.compile(r"минимальная температура обогрева", re.I), "Работает на обогрев до {v}"),
     (re.compile(r"макс\.? температура теплоносителя", re.I), "Теплоноситель до {v}"),
     (re.compile(r"макс\.? площадь обогрева", re.I), "Обогрев до {v}"),
     (re.compile(r"объем воды в радиаторе", re.I), "Объём воды в радиаторе {v}"),
@@ -107,6 +108,18 @@ def group_of(category: str) -> str:
         if any(needle in low for needle in needles):
             return group
     return "other"
+
+
+def retail_ok(category: str, name: str, price: int) -> bool:
+    """Годится ли позиция для розничной витрины: известная группа, не промышленная,
+    не аксессуар и цена в пределах своей группы. Общая для всех источников каталога."""
+    group = group_of(category)
+    if group == "other" or price <= 0:
+        return False
+    if (_NOT_FOR_RETAIL_CATEGORY.search(category) or _NOT_FOR_RETAIL_NAME.search(name)
+            or _ACCESSORY_NAME.search(name)):
+        return False
+    return PRICE_FLOOR[group] <= price <= PRICE_CAP[group]
 
 
 def _brand(name: str) -> str:
@@ -145,11 +158,7 @@ def load_catalog(directory: str | Path) -> list[CatalogItem]:
             category = categories.get(get("categoryId"), "")
             group = group_of(category)
             name = get("name")
-            if not (price > 0 and get("picture") and get("url") and group != "other"):
-                continue
-            if (_NOT_FOR_RETAIL_CATEGORY.search(category) or _NOT_FOR_RETAIL_NAME.search(name)
-                    or _ACCESSORY_NAME.search(name)
-                    or not PRICE_FLOOR[group] <= price <= PRICE_CAP[group]):
+            if not (get("picture") and get("url") and retail_ok(category, name, price)):
                 continue
             prose, attrs = parse_description(get("description"))
             items.append(CatalogItem(

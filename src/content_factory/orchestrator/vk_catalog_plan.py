@@ -56,6 +56,31 @@ def build_caption(item: CatalogItem, price: int) -> str:
     return f"{write_post(item, price)}\n\n{link_line(item)}"
 
 
+def load_catalog_items(catalog_dir, snapshot_path, refresh=None) -> tuple[list[CatalogItem], dict]:
+    """Позиции для ленты: свежий снимок из базы сайта, а при неудаче — прежний или старая выгрузка.
+
+    Сбой обновления не должен ни ронять цикл планировщика, ни считаться его ошибкой:
+    три «ошибочных» цикла подряд переводят контент-завод в L0 и останавливают посты.
+    """
+    from content_factory.storefront.catalog_snapshot import load_snapshot, refresh_snapshot
+    from content_factory.storefront.product_posts import load_catalog
+
+    report: dict = {}
+    items: list[CatalogItem] = []
+    if snapshot_path:
+        try:
+            report = (refresh or refresh_snapshot)(snapshot_path)
+            if Path(snapshot_path).is_file():
+                items = load_snapshot(snapshot_path)
+                report["source"] = "site"
+        except Exception as error:  # noqa: BLE001 — любая причина = откат на выгрузку
+            report = {"status": f"failed: {type(error).__name__}", "source": "yml"}
+    if not items:
+        items = load_catalog(catalog_dir)
+        report["source"] = "yml"
+    return items, report
+
+
 def _safe(name: str) -> str:
     return re.sub(r"[^A-Za-z0-9_-]", "_", name)
 

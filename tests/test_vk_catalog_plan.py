@@ -164,3 +164,49 @@ def test_realign_keeps_seasonal_posts_and_drops_old_checklists_first(tmp_path):
     assert season.status != "superseded" and slot_kind(season.due_at) == "editorial"
     assert len(result["dropped"]) == 1
     assert "season" not in store.get(result["dropped"][0]).source_key
+
+
+def _yml_dir(tmp_path):
+    folder = tmp_path / "yml"
+    folder.mkdir()
+    (folder / "01.yml").write_text(
+        '<?xml version="1.0" encoding="utf-8"?><yml_catalog><shop><categories>'
+        '<category id="1">Бытовые сплит-системы</category></categories><offers>'
+        '<offer id="yml:1"><url>https://splithome.ru/product/a/</url><price>25000</price>'
+        '<categoryId>1</categoryId><picture>https://img/a.png</picture><name>Сплит-система A</name>'
+        '<description>Описание.</description></offer></offers></shop></yml_catalog>',
+        encoding="utf-8")
+    return folder
+
+
+def _snapshot_file(tmp_path):
+    import json
+    path = tmp_path / "snap.json"
+    path.write_text(json.dumps([{
+        "offer_id": "breeze:НС-1", "slug": "s-1", "title": "XIGMA Сплит-система S1", "price": 20000,
+        "category": "Бытовые сплит-системы", "description": "Описание.", "picture": "https://img/s.png",
+        "specs": {}, "is_heat_pump": False, "heating_min_temp": None}], ensure_ascii=False),
+        encoding="utf-8")
+    return path
+
+
+def test_site_snapshot_is_preferred_over_the_old_yml_export(tmp_path):
+    from content_factory.orchestrator.vk_catalog_plan import load_catalog_items
+
+    items, report = load_catalog_items(_yml_dir(tmp_path), _snapshot_file(tmp_path),
+                                       refresh=lambda path: {"status": "refreshed"})
+
+    assert [item.id for item in items] == ["breeze:NS-1"]
+    assert report == {"status": "refreshed", "source": "site"}
+
+
+def test_a_crashing_refresh_falls_back_to_yml_and_never_raises(tmp_path):
+    from content_factory.orchestrator.vk_catalog_plan import load_catalog_items
+
+    def broken(path):
+        raise RuntimeError("docker недоступен")
+
+    items, report = load_catalog_items(_yml_dir(tmp_path), tmp_path / "нет.json", refresh=broken)
+
+    assert [item.id for item in items] == ["yml:1"]
+    assert report["source"] == "yml" and report["status"].startswith("failed")
