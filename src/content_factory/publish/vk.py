@@ -36,6 +36,10 @@ def adapt_vk_text(caption: str, max_chars: int = VK_MESSAGE_MAX) -> str:
     """Telegram HTML → читаемый VK plain text без изменения фактов и цены."""
     parser = _PlainText()
     parser.feed(caption or "")
+    # close() обязателен: парсер придерживает хвост с «&» в последних 34 символах
+    # (ждёт окончания «сущности») и без него отдаёт пустой текст. С короткой
+    # ссылкой `…&utm_content=breeze%3ANS-1` пропадал весь пост целиком.
+    parser.close()
     text = html.unescape("".join(parser.parts))
     # Публичный каталог иногда склеивает индекс модели и следующее русское слово:
     # `SRW-12000-Dоднофазный` → `SRW-12000-D однофазный`.

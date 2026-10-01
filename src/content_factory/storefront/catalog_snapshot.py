@@ -22,6 +22,7 @@ from content_factory.storefront.product_posts import (
     _brand,
     group_of_item,
     parse_description,
+    refine_group,
     retail_ok,
 )
 from content_factory.storefront.vk_catalog_export import ascii_offer_id
@@ -117,7 +118,7 @@ def load_snapshot(path: str | Path) -> list[CatalogItem]:
                     f"{row['heating_min_temp']} °C".replace("-", "−")
         items.append(CatalogItem(
             id=ascii_offer_id(row["offer_id"]), url=f"{SITE}/product/{quote(row['slug'])}/",
-            price=price, group=group_of_item(category, name), category=category, picture=row["picture"],
+            price=price, group=refine_group(group_of_item(category, name), attrs), category=category, picture=row["picture"],
             name=name, brand=_brand(name), prose=prose, attrs=attrs,
         ))
     return items

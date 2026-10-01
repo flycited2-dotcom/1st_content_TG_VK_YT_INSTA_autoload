@@ -316,3 +316,20 @@ def test_sentences_that_depend_on_a_missing_subject_are_not_used():
     sentences = benefit_sentences(_item(prose=prose), limit=3)
 
     assert sentences == ["Прибор прогревает помещение площадью до 20 м2 за 15 минут."]
+
+
+def test_a_water_convector_is_a_heating_system_part_not_a_room_heater(tmp_path):
+    """«Конвектор напольный Royal Thermo STEP» с давлением 10 бар и теплоотдачей при Δt —
+    водяной: он работает от системы отопления. Крючок про «согреть одну комнату» ему не подходит."""
+    from content_factory.storefront.product_posts import refine_group
+
+    water = {"Тип теплоносителя": "Вода", "Максимальное рабочее давление": "10 бар"}
+
+    assert refine_group("heater", water) == "radiator"
+    assert refine_group("heater", {"Защита от перегрева": "Да"}) == "heater"
+    assert refine_group("ac", water) == "ac", "перекладываем только обогреватели"
+
+    root = _write_catalog(tmp_path, [dict(
+        id="conv", price=17000, cat=1, name="Конвектор напольный Royal Thermo STEP",
+        desc="Описание.\n\nХарактеристики:\n• Тип теплоносителя: Вода\n• Максимальное рабочее давление: 10")])
+    assert load_catalog(root)[0].group == "radiator"

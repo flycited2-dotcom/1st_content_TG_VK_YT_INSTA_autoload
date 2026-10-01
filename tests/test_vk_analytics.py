@@ -202,3 +202,36 @@ def test_catalog_posts_link_to_the_live_product_page_not_to_the_order_bot(tmp_pa
 
     assert "https://splithome.ru/product/x/" in text
     assert "t.me/" not in text and "start=ord_" not in text
+
+
+def test_post_text_survives_when_the_link_with_utm_ends_the_caption():
+    """Пост про приточку Бриза пришёл в Telegram пустым: одни заголовки без текста.
+
+    HTML-парсер придерживает хвост с «&» в последних 34 символах (принимает его за
+    начало сущности) и без close() не отдаёт. У ссылки с коротким идентификатором
+    `utm_content=breeze%3ANS-1737107` амперсанд попадал в это окно, и пропадал ВЕСЬ
+    текст поста: с `rusklimat…` (длиннее) всё работало, поэтому дефект не замечали.
+    """
+    from content_factory.publish.vk import adapt_vk_text
+
+    caption = ("Приточка для квартиры\n\n💎 47 900 ₽\n\nФильтр тонкой очистки.\n\n"
+               "🛒 Смотреть и заказать: https://splithome.ru/product/x/"
+               "?utm_source=vk&utm_medium=organic_social&utm_campaign=catalog_post"
+               "&utm_content=breeze%3ANS-1737107")
+
+    text = adapt_vk_text(caption)
+
+    assert "Фильтр тонкой очистки." in text
+    assert text.endswith("utm_content=breeze%3ANS-1737107")
+
+
+def test_every_catalog_post_keeps_its_text_whatever_the_offer_id_length(tmp_path):
+    links = OrderLinks(tmp_path / "source.db")
+    for offer_id in ("breeze:NS-1", "breeze:NS-1737107", "rusklimat:NS-1630637", "x:1"):
+        caption = (f"Текст поста про {offer_id}.\n\n🛒 Смотреть и заказать: https://splithome.ru/product/x/"
+                   f"?utm_source=vk&utm_medium=organic_social&utm_campaign=catalog_post&utm_content={offer_id}")
+
+        body, _ = tracked_caption(caption, 5, source_key=f"catalog:{offer_id}",
+                                  order_bot="OrderBot", links=links)
+
+        assert f"Текст поста про {offer_id}." in body, offer_id

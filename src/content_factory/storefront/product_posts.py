@@ -141,6 +141,20 @@ def group_of_item(category: str, name: str) -> str:
     return group_of(category)
 
 
+_HYDRONIC_SPEC = re.compile(r"теплоноситель|рабочее давление|теплоотдача при", re.I)
+
+
+def refine_group(group: str, attrs: dict) -> str:
+    """Конвектор с теплоносителем и рабочим давлением — водяной, часть системы отопления.
+
+    Название и категория сайта называют его обогревателем, но «согреть одну комнату»
+    он не может: ему нужна система отопления. Характеристики это выдают.
+    """
+    if group == "heater" and any(_HYDRONIC_SPEC.search(key) for key in attrs):
+        return "radiator"
+    return group
+
+
 def group_of(category: str) -> str:
     low = category.casefold()
     for group, needles in GROUP_BY_CATEGORY:
@@ -200,6 +214,7 @@ def load_catalog(directory: str | Path) -> list[CatalogItem]:
             if not (get("picture") and get("url") and retail_ok(category, name, price)):
                 continue
             prose, attrs = parse_description(get("description"))
+            group = refine_group(group, attrs)
             items.append(CatalogItem(
                 id=str(offer.get("id")), url=get("url"), price=price, group=group,
                 category=category, picture=get("picture"), name=name,
