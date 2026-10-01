@@ -138,3 +138,54 @@ def test_manual_phone_typed(tmp_path):
     callback("777", "order:skip_comment", USER)             # на шаг телефона
     r = text("777", "+7 978 111-22-33", USER)               # телефон текстом
     assert r.lead is not None and "Телефон: +7 978 111-22-33" in r.lead
+
+
+SOLD_CAPTION = "⛔ ПРОДАНО\nУтюг Blackton SI1113 2200Вт, керамика\n<blockquote>💎 <b>2 190 ₽</b></blockquote>"
+
+
+def test_sold_item_is_not_offered_for_order(tmp_path):
+    """Пост с неделю назад, товар ушёл: клиент не должен выбирать количество.
+
+    Раньше бот показывал «⛔ ПРОДАНО» и тут же спрашивал «Сколько штук заказываете?»,
+    а потом принимал заявку на товар, которого нет.
+    """
+    db = tmp_path / "s.db"
+    links, ps, store = OrderLinks(db), PublishState(db), OrderDialogStore(db)
+    ps.mark("excel|blackton|si1113", 1, channel="@chan", caption=SOLD_CAPTION)
+    code = links.code_for("excel|blackton|si1113")
+    start, *_ = make_order_flow(store, links, ps)
+
+    reply = start("777", code, USER)
+
+    assert "продан" in reply.text.lower()
+    assert reply.markup is None, "кнопок количества у проданного товара быть не должно"
+    assert store.snapshot("777") is None, "диалог заказа не открывается"
+    assert "splithome.ru" in reply.text and "978" in reply.text, "куда обратиться вместо заказа"
+    assert links.clicks()[0].key == "excel|blackton|si1113", "интерес всё равно фиксируем"
+
+
+def test_arbitrary_text_is_not_accepted_as_a_phone_number(tmp_path):
+    """Фраза «Слабое описание, почти пусто» ушла менеджерам как телефон клиента."""
+    links, store, key, code, start, callback, text, contact = _setup(tmp_path)
+    start("777", code, USER)
+    callback("777", "order:qty:1", USER)
+    callback("777", "order:skip_comment", USER)
+
+    reply = text("777", "Слабое описание, почти пусто", USER)
+
+    assert reply.lead is None
+    assert "телефон" in reply.text.lower()
+    assert store.snapshot("777") is not None, "диалог остаётся открытым"
+    assert links.leads() == []
+
+
+def test_stale_order_dialog_expires_and_stops_swallowing_messages(tmp_path):
+    from content_factory.bot.order_dialog import OrderDialogStore as Store
+
+    store = Store(tmp_path / "s.db", ttl_seconds=1800)
+    store.start("777", "k")
+    assert store.snapshot("777") is not None
+
+    store.expire_for_test("777", seconds_ago=3600)
+
+    assert store.snapshot("777") is None, "диалог получасовой давности не должен перехватывать текст"

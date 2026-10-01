@@ -386,3 +386,21 @@ def test_excel_fn_shows_scheduled_items_with_start_time(tmp_path):
     text = excel_fn()
     assert "Запланировано: 1" in text
     assert "старт" in text
+
+
+def test_telegram_client_gives_up_on_a_hung_connection_in_seconds_not_minutes():
+    """С сервера до api.telegram.org доходит лишь часть соединений: остальные виснут.
+
+    С общим таймаутом 40 секунд однопоточный бот ждал каждое зависшее соединение
+    целиком, и нажатие кнопки обрабатывалось через десятки секунд. Теперь коннект
+    обрывается за считанные секунды и сразу повторяется.
+    """
+    import httpx
+    from content_factory.publish.telegram import TELEGRAM_RETRIES, telegram_client
+
+    client = telegram_client(40)
+
+    assert client.timeout.connect <= 5, "зависший коннект должен рваться быстро"
+    assert client.timeout.read == 40, "long-poll getUpdates ждёт ответ дольше"
+    assert TELEGRAM_RETRIES >= 3
+    assert isinstance(client._transport, httpx.HTTPTransport)

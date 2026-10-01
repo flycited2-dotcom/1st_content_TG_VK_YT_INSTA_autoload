@@ -12,7 +12,8 @@ from content_factory.orchestrator.vk_content_plan import (
 )
 from content_factory.storefront.product_posts import CatalogItem, LiveInfo
 
-PROSE = "Ночной режим работает при уровне шума от 24 дБ(А) и не мешает спать."
+PROSE = ("Ночной режим работает при уровне шума от 24 дБ(А) и не мешает спать. "
+    "Расширенная гарантия на прибор составляет 5 лет.")
 
 
 def _items(count=40):
@@ -210,3 +211,83 @@ def test_a_crashing_refresh_falls_back_to_yml_and_never_raises(tmp_path):
 
     assert [item.id for item in items] == ["yml:1"]
     assert report["source"] == "yml" and report["status"].startswith("failed")
+
+
+class _FakePublisher:
+    def __init__(self, ok=True, dry_run=False):
+        self.calls, self.ok, self.dry_run = [], ok, dry_run
+
+    def edit_text(self, post_id, caption, *, publish_at=None):
+        from types import SimpleNamespace
+        self.calls.append(dict(post_id=post_id, caption=caption, publish_at=publish_at))
+        return SimpleNamespace(ok=self.ok, dry_run=self.dry_run, error="" if self.ok else "нет прав")
+
+
+def _published_item(store, tmp_path, due, status="published_unverified"):
+    from content_factory.orchestrator.vk_content_plan import VkPlanCandidate
+    item_id = store.add(VkPlanCandidate(
+        source_key="catalog:breeze:NS-9", source_ts=1.0,
+        caption="Товар\n💎 9 990 ₽\n\n🛒 Смотреть и заказать: https://splithome.ru/product/x/?utm=1",
+        card_path="/x.jpg", category="heaters", brand="ROYAL", content_type="product"), due)
+    with store._connect() as connection:
+        connection.execute("UPDATE vk_content_plan SET status=?,vk_post_id=77 WHERE id=?", (status, item_id))
+    return item_id
+
+
+def test_sold_out_product_is_marked_on_the_published_wall_post_and_restored_later(tmp_path):
+    """Человек долистал до поста недельной давности, а товара уже нет."""
+    from content_factory.orchestrator.vk_catalog_plan import reconcile_published
+
+    store = VkContentPlanStore(tmp_path / "plan.db")
+    now = datetime(2026, 10, 10, 12, 0)
+    item_id = _published_item(store, tmp_path, int((now - timedelta(days=6)).timestamp()))
+    compose = lambda item: item.caption  # noqa: E731
+    publisher = _FakePublisher()
+
+    gone = reconcile_published(store, publisher, now, compose,
+                               fetch_url=lambda url: LiveInfo(price=0, in_stock=False))
+
+    assert gone["marked"] == [item_id]
+    assert publisher.calls[0]["post_id"] == 77
+    assert publisher.calls[0]["caption"].startswith("⛔ Товар закончился")
+    assert publisher.calls[0]["publish_at"] is None, "вышедший пост правим без отложенной даты"
+    again = reconcile_published(store, publisher, now, compose,
+                                fetch_url=lambda url: LiveInfo(price=0, in_stock=False))
+    assert again["marked"] == [] and len(publisher.calls) == 1, "повторно не правим"
+
+    back = reconcile_published(store, publisher, now, compose,
+                               fetch_url=lambda url: LiveInfo(price=9990, in_stock=True))
+    assert back["restored"] == [item_id]
+    assert not publisher.calls[-1]["caption"].startswith("⛔")
+
+
+def test_a_postponed_vk_post_keeps_its_publish_date_when_edited(tmp_path):
+    """wall.edit без publish_date превращает отложенную запись в опубликованную немедленно."""
+    from content_factory.orchestrator.vk_catalog_plan import reconcile_published
+
+    store = VkContentPlanStore(tmp_path / "plan.db")
+    now = datetime(2026, 10, 10, 12, 0)
+    future = int((now + timedelta(hours=5)).timestamp())
+    _published_item(store, tmp_path, future, status="photo_pending")
+    publisher = _FakePublisher()
+
+    reconcile_published(store, publisher, now, lambda item: item.caption,
+                        fetch_url=lambda url: LiveInfo(price=0, in_stock=False))
+
+    assert publisher.calls[0]["publish_at"] == future
+
+
+def test_failed_vk_edit_is_reported_and_not_remembered(tmp_path):
+    from content_factory.orchestrator.vk_catalog_plan import reconcile_published
+
+    store = VkContentPlanStore(tmp_path / "plan.db")
+    now = datetime(2026, 10, 10, 12, 0)
+    item_id = _published_item(store, tmp_path, int((now - timedelta(days=1)).timestamp()))
+    publisher = _FakePublisher(ok=False)
+
+    result = reconcile_published(store, publisher, now, lambda item: item.caption,
+                                 fetch_url=lambda url: LiveInfo(price=0, in_stock=False))
+
+    assert result["failed"] == [item_id] and result["marked"] == []
+    assert store.last_event(item_id, ("marked_sold",)) is None, "неудачу не запоминаем: попробуем снова"
+    assert len(publisher.calls) == 1, "после первой ошибки VK не долбим остальные записи"

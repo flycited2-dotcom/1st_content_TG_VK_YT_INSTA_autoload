@@ -167,3 +167,19 @@ def test_bootstrap_existing_planned_post_is_idempotent(tmp_path):
     assert store.bootstrap_plan_publications(now=101) == 1
     assert store.bootstrap_plan_publications(now=102) == 0
     assert store.due_publications(200)[0].post_id == 77
+
+
+def test_catalog_posts_link_to_the_live_product_page_not_to_the_order_bot(tmp_path):
+    """Под каталожным постом заказ идёт через сайт: страница товара показывает живой остаток.
+
+    Бот заказа опирался на подпись канала недельной давности: к проданному товару
+    он всё равно спрашивал количество. Кроме того, в нём работает и меню владельца.
+    """
+    links = OrderLinks(tmp_path / "source.db")
+    caption = "Товар\n🛒 Смотреть и заказать: https://splithome.ru/product/x/?utm_source=vk"
+
+    text, _ = tracked_caption(caption, 81, source_key="catalog:breeze:NS-1",
+                              order_bot="OrderBot", links=links)
+
+    assert "https://splithome.ru/product/x/" in text
+    assert "t.me/" not in text and "start=ord_" not in text

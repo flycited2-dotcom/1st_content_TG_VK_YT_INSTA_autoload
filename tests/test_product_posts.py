@@ -114,7 +114,9 @@ def test_feature_bullets_skip_negatives_and_a_lone_bullet_is_not_shown():
 
 def test_item_without_substance_is_not_postable():
     assert not is_postable(_item(prose="Продукты бренда проходят контроль качества на всех этапах."))
-    assert is_postable(_item(prose="Ночной режим работает при уровне шума от 24 дБ(А)."))
+    assert not is_postable(_item(prose="Ночной режим работает при уровне шума от 24 дБ(А)."))
+    assert is_postable(_item(prose="Ночной режим работает при уровне шума от 24 дБ(А). "
+                                  "Расширенная гарантия на прибор составляет 5 лет."))
 
 
 def test_live_page_markup_gives_price_and_stock():
@@ -144,7 +146,8 @@ def test_autumn_calendar_leans_to_heating_and_summer_to_air_conditioners():
 
 
 def test_pick_avoids_recent_brands_and_never_repeats_an_item():
-    prose = "Ночной режим работает при уровне шума от 24 дБ(А) и не мешает спать."
+    prose = ("Ночной режим работает при уровне шума от 24 дБ(А) и не мешает спать. "
+             "Расширенная гарантия на прибор составляет 5 лет.")
     items = [_item(id=f"a{n}", brand="royal" if n % 2 else "ballu", prose=prose)
              for n in range(8)]
 
@@ -194,7 +197,8 @@ def test_filler_without_numbers_does_not_make_a_post():
     concrete = f"{fluff} Бак объёмом 9,4 л позволяет заливать воду раз в сутки."
     assert benefit_sentences(_item(prose=concrete)) == [
         "Бак объёмом 9,4 л позволяет заливать воду раз в сутки."]
-    assert is_postable(_item(prose=concrete))
+    assert not is_postable(_item(prose=concrete)), "один факт — это не пост"
+    assert is_postable(_item(prose=concrete + " Работа устройства составляет до 12 часов."))
 
 
 def test_section_count_is_declined_properly():
@@ -228,3 +232,38 @@ def test_every_site_category_with_stock_lands_in_a_group():
     assert group_of("Тёплый пол") == "floor" and group_of("Тёплые полы") == "floor"
     assert group_of("Накопительные водонагреватели") == "water"
     assert group_of("Воздухоочистители") == "air"
+
+
+def test_a_single_line_about_the_product_line_does_not_make_a_post():
+    """Карточка «тепловая завеса и больше ничего» — владелец её забраковал: одно
+    предложение про всю линейку (мощностью 3–6 кВт) и пустота вокруг."""
+    curtain = _item(group="heater", category="Тепловые завесы",
+                    name="ROYAL CLIMA Электрическая завеса HEATGUARD RAH-HG0.8E5M",
+                    prose="Электрические завесы HEATGUARD - компактные тепловые завесы с электрическим "
+                          "нагревом, мощностью 3-6 кВт. Снижает теплопотери на 80-90% при открытом проёме.")
+
+    assert not is_postable(curtain)
+    full = _item(group="heater", category="Тепловые завесы", attrs={
+        "Защита от перегрева": "Да", "Таймер на отключение": "Да"}, prose=curtain.prose)
+    assert is_postable(full), "с двумя пунктами характеристик тот же товар уже достоин поста"
+
+
+def test_site_specs_become_facts_about_this_model_in_order_of_importance():
+    """Из базы сайта приходят гарантия, срок службы, хладагент: факты именно об этой модели."""
+    item = _item(attrs={
+        "Гарантийный срок": "5 лет", "Хладагент": "R32", "Срок службы": "10 лет",
+        "Инверторная технология": "Да", "Тепловой насос": "Да", "Страна производства": "КНР"})
+
+    bullets = feature_bullets(item, limit=4)
+
+    assert bullets[:2] == ["Работает на обогрев", "Инверторная технология"], \
+        "то, ради чего покупают, идёт раньше гарантии"
+    assert "Гарантия 5 лет" in bullets and "Хладагент R32" in bullets
+    assert not any("КНР" in line for line in bullets), "страна производства — не довод к покупке"
+
+
+def test_a_line_wide_power_range_is_not_presented_as_this_models_fact():
+    prose = ("Тепловые завесы линейки мощностью 3-6 кВт подходят для разных проёмов. "
+             "Ресурс нагревательного элемента составляет 25 лет.")
+
+    assert benefit_sentences(_item(prose=prose)) == ["Ресурс нагревательного элемента составляет 25 лет."]

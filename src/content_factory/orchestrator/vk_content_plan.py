@@ -20,7 +20,7 @@ from pathlib import Path
 import httpx
 from decouple import config
 
-from content_factory.publish.telegram import publish_post, send_message
+from content_factory.publish.telegram import publish_post, send_message, telegram_client
 from content_factory.publish.vk import VkPublisher, adapt_vk_text
 from content_factory.publish.vk_oauth import resolve_publisher_token
 from content_factory.publish.vk_text_sync import (
@@ -655,6 +655,21 @@ class VkContentPlanStore:
                     dropped.append(item.id)
         return {"moved": moved, "dropped": dropped}
 
+    def record_event(self, plan_id: int, event: str, details: str = "") -> None:
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT INTO vk_plan_events(ts,plan_id,event,details) VALUES(?,?,?,?)",
+                (int(time.time()), int(plan_id), event, details))
+
+    def last_event(self, plan_id: int, events: tuple[str, ...]) -> str | None:
+        """Последнее из перечисленных событий записи: так помним, помечен ли пост «закончился»."""
+        marks = ",".join("?" for _ in events)
+        with self._connect() as connection:
+            row = connection.execute(
+                f"SELECT event FROM vk_plan_events WHERE plan_id=? AND event IN ({marks}) "
+                "ORDER BY id DESC LIMIT 1", (int(plan_id), *events)).fetchone()
+        return row[0] if row else None
+
     def update_caption(self, item_id: int, caption: str) -> bool:
         """Заменить текст ещё не опубликованного поста; показанный или одобренный
         возвращается на ревью, иначе владелец одобрил бы один текст, а вышел другой."""
@@ -1269,7 +1284,7 @@ def run_cycle(*, store: VkContentPlanStore, source_db: str, telegram_token: str,
               catalog_dir: str | Path | None = None,
               catalog_photo_dir: str | Path = "assets/generated/products",
               catalog_snapshot: str | Path | None = None) -> dict:
-    client = http or httpx.Client(timeout=60)
+    client = http or telegram_client(60)
     result = {"planned": [], "auto_approved": [], "reviewed": [], "scheduled": [],
               "reminded": [], "visual_pending": [], "rebalanced": [],
               "errors": [], "autonomy_level": autonomy_level,
@@ -1367,6 +1382,16 @@ def run_cycle(*, store: VkContentPlanStore, source_db: str, telegram_token: str,
             result["errors"].append(f"review {item.id}: {error or 'state conflict'}")
 
     publisher = VkPublisher(vk_token, owner_id, dry_run=dry_run, http=client)
+
+    if catalog_dir and Path(catalog_dir).is_dir():
+        # Уже вышедшие посты: пометить «товар закончился» и снять пометку, если он вернулся.
+        # Сбой не считается ошибкой цикла: три «ошибочных» цикла подряд останавливают завод.
+        try:
+            from content_factory.orchestrator.vk_catalog_plan import reconcile_published
+            result["sold_marking"] = reconcile_published(
+                store, publisher, now, lambda item: publication_caption(item)[0], client=client)
+        except Exception as exc:  # noqa: BLE001
+            result["sold_marking"] = {"error": type(exc).__name__}
     for item in store.approved(int(now.timestamp())):
         body, tracked_url = publication_caption(item)
         native_photo = bool(native_photo_enabled and item.card_path)

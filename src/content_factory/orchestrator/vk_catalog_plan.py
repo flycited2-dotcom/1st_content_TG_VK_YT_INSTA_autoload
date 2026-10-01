@@ -23,6 +23,7 @@ from content_factory.orchestrator.vk_content_plan import (
     slot_ordinal,
 )
 from content_factory.storefront.product_posts import (
+    MONTH_WEIGHTS,
     PRICE_CAP,
     CatalogItem,
     group_for_slot,
@@ -107,9 +108,17 @@ def materialize_catalog_plan(store: VkContentPlanStore, items: list[CatalogItem]
         if slot_kind(due_at) != "product" and not fill_editorial_gaps:
             continue
         ordinal = slot_ordinal(due_at)
-        group = group_for_slot(ordinal, datetime.fromtimestamp(due_at).date())
+        day = datetime.fromtimestamp(due_at).date()
+        group = group_for_slot(ordinal, day)
+        # Запасные группы по убыванию сезонного веса: слот не должен пустовать только
+        # потому, что подходящие товары одной группы закончились.
+        weights = MONTH_WEIGHTS[day.month]
+        fallbacks = [g for g in sorted(weights, key=lambda g: -weights[g]) if g != group]
         for _ in range(ATTEMPTS_PER_SLOT):
             item = pick_item(items, group, taken | skipped, recent, salt=str(ordinal))
+            if item is None and fallbacks:
+                group = fallbacks.pop(0)
+                continue
             if item is None:
                 break
             live = fetch(client, item)
@@ -175,4 +184,63 @@ def refresh_catalog_items(store: VkContentPlanStore, client: httpx.Client, now: 
                                     item.caption, count=1)
             if store.update_caption(item.id, fresh):
                 result["repriced"].append(item.id)
+    return result
+
+
+SOLD_PREFIX = "⛔ Товар закончился. Актуальные позиции в наличии — на сайте: https://splithome.ru/catalog/"
+PUBLISHED_STATUSES = ("photo_pending", "photo_confirmed", "photo_overdue",
+                      "published_unverified", "published")
+MARK_EVENTS = ("marked_sold", "marked_available")
+RECONCILE_DAYS = 45
+RECONCILE_LIMIT = 10
+
+
+def reconcile_published(store: VkContentPlanStore, publisher, now: datetime, compose,
+                        fetch_url=None, client=None, days: int = RECONCILE_DAYS) -> dict[str, list[int]]:
+    """Опубликованный пост не должен обещать товар, которого уже нет.
+
+    Человек долистал до записи недельной давности и хочет заказать, а остатка нет.
+    Если на странице товара «нет в наличии», первой строкой поста ставится пометка;
+    вернулся в наличие — пометка снимается. Правится только текст: фото остаётся.
+    Отложенная запись сохраняет дату публикации, иначе VK выпустит её сразу.
+    """
+    from content_factory.storefront.product_posts import parse_live
+
+    def default_fetch(url: str):
+        try:
+            response = client.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=25)
+        except httpx.HTTPError:
+            return None
+        return parse_live(response.text) if response.status_code == 200 else None
+
+    fetch_url = fetch_url or default_fetch
+    result: dict[str, list[int]] = {"marked": [], "restored": [], "failed": []}
+    since = int((now - timedelta(days=days)).timestamp())
+    checked = 0
+    for item in store.list():
+        if not (item.source_key.startswith(CATALOG_PREFIX) and item.status in PUBLISHED_STATUSES
+                and item.vk_post_id and item.due_at >= since):
+            continue
+        if checked >= RECONCILE_LIMIT:
+            break
+        link = _LINK.search(item.caption)
+        live = fetch_url(link.group(0).split("?")[0]) if link else None
+        checked += 1
+        if live is None:  # сеть или разметка подвели — не решаем за сайт
+            continue
+        marked = store.last_event(item.id, MARK_EVENTS) == "marked_sold"
+        if live.in_stock == (not marked):
+            continue  # пост уже в правильном состоянии
+        body = compose(item)
+        text = body if live.in_stock else f"{SOLD_PREFIX}\n\n{body}"
+        postponed = item.due_at > int(now.timestamp())
+        reply = publisher.edit_text(int(item.vk_post_id), text,
+                                    publish_at=item.due_at if postponed else None)
+        if not reply.ok:
+            result["failed"].append(item.id)
+            break  # права или VK недоступны — остальные записи тоже не пройдут
+        if getattr(reply, "dry_run", False):
+            continue
+        store.record_event(item.id, "marked_available" if live.in_stock else "marked_sold", text[:120])
+        result["restored" if live.in_stock else "marked"].append(item.id)
     return result

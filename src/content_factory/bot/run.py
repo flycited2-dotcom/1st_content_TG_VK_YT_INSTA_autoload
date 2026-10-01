@@ -17,7 +17,9 @@ from decouple import config
 
 from content_factory.config import load_config
 from content_factory.orchestrator.auto import auto_command, auto_enabled
-from content_factory.publish.telegram import edit_post_media, publish_post, PublishState, TG_API
+from content_factory.publish.telegram import (
+    edit_post_media, publish_post, PublishState, TG_API, telegram_client,
+)
 from content_factory.publish.orders import OrderLinks, order_markup
 from content_factory.bot.order_dialog import OrderDialogStore
 from content_factory.bot.order_flow import make_order_flow
@@ -445,7 +447,7 @@ def finalize_preview(http, token: str, cq: dict, verdict: str) -> None:
 
 
 def get_updates(token: str, offset: int, timeout: int = 30, http=None) -> list:
-    client = http or httpx.Client(timeout=timeout + 10)
+    client = http or telegram_client(timeout + 10)
     r = client.get(f"{TG_API}/bot{token}/getUpdates",
                    params={"offset": offset, "timeout": timeout})
     return (r.json() or {}).get("result", [])
@@ -544,7 +546,7 @@ def main():
     make_fn = make_make_fn(cfg.state.db, prices_dir)
     find_fn, pick_fn, excel_fn = make_find_pick_fns(cfg.state.db, prices_dir)
     cancel_excel_fn = make_cancel_excel_fn(cfg.state.db, config("FOTOGEN_QUEUE_DB"))
-    http = httpx.Client(timeout=40)
+    http = telegram_client(40)
     review_channel = config("TELEGRAM_REVIEW_CHANNEL_ID", cfg.telegram.review_channel_id)
     price_fn = make_price_fn(cfg.state.db, token, review_channel,
                              cfg.telegram.parse_mode, links, http=http)
@@ -732,6 +734,9 @@ def main():
                             reply = "Материал уже обработан"
                         else:
                             pending.set(owner or chat_v, f"/vkrevision {item.id}")
+                            # Открытый опросник заказа перехватывал бы этот ответ первым:
+                            # текст правки ушёл бы менеджерам как «телефон клиента».
+                            order_store.cancel(owner or chat_v)
                             reply = f"📝 Что изменить в CF-VK-{item.id:03d}?"
                             _send_force_reply(
                                 owner or chat_v, reply,

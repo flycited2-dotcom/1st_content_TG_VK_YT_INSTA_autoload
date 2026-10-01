@@ -17,7 +17,9 @@ for product in queryset:
         continue
     specs = {}
     for value in product.tech_values.all():
-        specs[value.spec.title] = value.value
+        # Единица измерения хранится отдельно у характеристики: без неё «1196» — не факт.
+        unit = (value.spec.unit or "").strip()
+        specs[value.spec.title] = f"{value.value} {unit}".strip()
     rows.append({
         "offer_id": f"{product.source}:{product.nc_code}",
         "slug": product.slug,

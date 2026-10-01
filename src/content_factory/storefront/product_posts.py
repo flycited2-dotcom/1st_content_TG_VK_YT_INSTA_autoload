@@ -50,7 +50,9 @@ _SERIES_SENTENCE = re.compile(
     r"линейк|модельн|моделей|модели\b|серии\b|серия\b|типоразмер|кабел|докупа|комплектаци|"
     r"настроен|перезапуска|в комплект|2000|предназначен[а-я]* для работы|"
     r"бренд|компани|продукты |продукци|производств[а-я]* контрол|этапах производства|"
-    r"условия эксплуатации|окружающего воздуха|относительной влажности", re.I)
+    r"условия эксплуатации|окружающего воздуха|относительной влажности|моделями|моделях|"
+    # Диапазон «3-6 кВт», «20-70 м2», «от 6 500 до 24 000 BTU» — это про все модели линейки.
+    r"[0-9]\s*[-–—]\s*[0-9][0-9 ]*\s*(?:кВт|Вт|м2|м²|л\b|BTU)|от [0-9][0-9 ]* до [0-9][0-9 ]*\s*(?:кВт|Вт|м2|м²|BTU)", re.I)
 
 # Промышленные и нестандартные позиции — не для розничной группы.
 _NOT_FOR_RETAIL_NAME = re.compile(
@@ -75,9 +77,18 @@ BOOL_FEATURES = (
     (re.compile(r"защита от перегрева", re.I), "Защита от перегрева"),
     (re.compile(r"ручка для перемещения", re.I), "Ручка для переноски"),
     (re.compile(r"самодиагностик", re.I), "Самодиагностика неисправностей"),
+    (re.compile(r"встроенный гигростат", re.I), "Встроенный гигростат"),
+    (re.compile(r"ночной режим", re.I), "Ночной режим"),
+    (re.compile(r"пульт управления в комплекте", re.I), "Пульт в комплекте"),
 )
 VALUE_FEATURES = (
     (re.compile(r"минимальная температура обогрева", re.I), "Работает на обогрев до {v}"),
+    (re.compile(r"гарантийный срок", re.I), "Гарантия {v}"),
+    (re.compile(r"^хладагент$", re.I), "Хладагент {v}"),
+    (re.compile(r"срок службы", re.I), "Срок службы {v}"),
+    (re.compile(r"теплоотдача при", re.I), "Теплоотдача {v}"),
+    (re.compile(r"максимальное рабочее давление", re.I), "Рабочее давление до {v}"),
+    (re.compile(r"макс\.? температура воды", re.I), "Нагрев воды до {v}"),
     (re.compile(r"макс\.? температура теплоносителя", re.I), "Теплоноситель до {v}"),
     (re.compile(r"макс\.? площадь обогрева", re.I), "Обогрев до {v}"),
     (re.compile(r"объем воды в радиаторе", re.I), "Объём воды в радиаторе {v}"),
@@ -202,7 +213,8 @@ def benefit_sentences(item: CatalogItem, limit: int = 2) -> list[str]:
 
 
 def feature_bullets(item: CatalogItem, limit: int = 4) -> list[str]:
-    bullets = []
+    ranked: list[tuple[int, str]] = []
+    patterns = [p for p, _ in BOOL_FEATURES] + [p for p, _ in VALUE_FEATURES]
     for key, value in item.attrs.items():
         is_value_key = any(p.search(key) for p, _ in VALUE_FEATURES)
         if _SKIP_ATTR.search(key) and not is_value_key:
@@ -210,11 +222,15 @@ def feature_bullets(item: CatalogItem, limit: int = 4) -> list[str]:
         low = value.casefold().strip(" .")
         for pattern, text in BOOL_FEATURES:
             if pattern.search(key) and low in {"да", "есть", "имеется"}:
-                bullets.append(text)
+                ranked.append((patterns.index(pattern), text))
         for pattern, template in VALUE_FEATURES:
             if pattern.search(key) and low not in {"нет", "-", ""}:
-                bullets.append(template.format(v=value.strip()))
-    return list(dict.fromkeys(bullets))[:limit]
+                ranked.append((patterns.index(pattern), template.format(v=value.strip())))
+    # Порядок списка шаблонов — это порядок важности: обогрев и инвертор раньше гарантии.
+    seen: dict[str, int] = {}
+    for rank, text in sorted(ranked):
+        seen.setdefault(text, rank)
+    return list(seen)[:limit]
 
 
 # ── числа для крючков ───────────────────────────────────────────────────────
@@ -374,10 +390,21 @@ def write_post(item: CatalogItem, price: int | None = None) -> str:
     return "\n".join(parts).strip()
 
 
+def richness(item: CatalogItem) -> int:
+    """Сколько содержательных фактов можно дать в посте: предложения с цифрой и
+    пункты характеристик (список от двух пунктов считается за один факт, от четырёх — за два)."""
+    concrete = sum(1 for sentence in benefit_sentences(item) if _NUM_UNIT.search(sentence))
+    bullets = len(feature_bullets(item))
+    return concrete + (1 if bullets >= 2 else 0) + (1 if bullets >= 4 else 0)
+
+
+MIN_RICHNESS = 2
+
+
 def is_postable(item: CatalogItem) -> bool:
-    """Пост без конкретики — пустая реклама: нужна цифра в описании или пара пунктов."""
-    concrete = any(_NUM_UNIT.search(sentence) for sentence in benefit_sentences(item))
-    return concrete or len(feature_bullets(item)) >= 2
+    """Пост из одной фразы про линейку («завеса… мощностью 3–6 кВт») — не продажа: владелец
+    получил такую карточку и забраковал. Нужны минимум два содержательных факта."""
+    return richness(item) >= MIN_RICHNESS
 
 
 # ── живая проверка карточки на сайте ────────────────────────────────────────

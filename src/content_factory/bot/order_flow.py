@@ -24,6 +24,17 @@ CONTACT_KB = {"keyboard": [[{"text": "📱 Отправить телефон", "
               "resize_keyboard": True, "one_time_keyboard": True}
 REMOVE_KB = {"remove_keyboard": True}
 
+_SOLD_MARK = "ПРОДАНО"
+_SHOP_PHONE = "+7 978 579-29-95"
+_SHOP_CATALOG = "https://splithome.ru/catalog/"
+_PHONE_RETRY = ("Это не похоже на телефон. Нажмите «📱 Отправить телефон», впишите номер "
+                "(10–15 цифр) или нажмите «Пропустить».")
+
+
+def _is_phone(text: str) -> bool:
+    return 10 <= len(re.sub(r"\D", "", text)) <= 15
+
+
 _COMMENT_PROMPT = ("Комментарий к заказу? (адрес, вопрос, удобное время) — "
                    "напишите или пропустите.")
 _PHONE_PROMPT = ("📱 Оставьте телефон, чтобы менеджер перезвонил: нажмите кнопку ниже, "
@@ -92,6 +103,18 @@ def make_order_flow(store, links, pub_state):
         key, origin, content_id = attribution
         links.add_click(int(user.get("id") or 0), user.get("username") or "", key,
                         origin=origin, content_id=content_id)
+        summary = item_summary(pub_state, key)
+        if _SOLD_MARK in summary.upper():
+            # Пост мог провисеть неделю: товар ушёл, а ссылка осталась. Заказ на него
+            # не принимаем и количество не спрашиваем — отправляем к живому каталогу.
+            nl = chr(10)
+            name = nl.join(line for line in summary.splitlines()
+                           if _SOLD_MARK not in line.upper()).strip()
+            return OrderReply(
+                "⛔ К сожалению, этот товар уже продан."
+                + (nl + name if name else "")
+                + nl + nl + f"Подберём похожий: напишите нам или позвоните {_SHOP_PHONE}. "
+                  f"Актуальные позиции в наличии — на сайте: {_SHOP_CATALOG}")
         store.start(chat_id, key, origin=origin, content_id=content_id)
         return OrderReply(f"Вы выбрали:\n{item_summary(pub_state, key)}\n\n"
                           f"Сколько штук заказываете?", QTY_KB)
@@ -140,6 +163,9 @@ def make_order_flow(store, links, pub_state):
             return _phone_reply()
         if st.step == "awaiting_phone":
             t = (msg_text or "").strip()
+            if t != "Пропустить" and not _is_phone(t):
+                # Любая фраза не должна уходить менеджерам «телефоном клиента».
+                return OrderReply(_PHONE_RETRY, keyboard=CONTACT_KB)
             phone = "" if t == "Пропустить" else t
             return _finalize(chat_id, st, user, phone=phone)
         return None

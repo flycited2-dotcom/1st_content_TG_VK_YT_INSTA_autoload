@@ -15,7 +15,9 @@ def test_migrates_legacy_table_without_comment(tmp_path):
     con.execute("INSERT INTO order_dialog VALUES('1','awaiting_comment','k',2)")
     con.commit()
     con.close()
-    s = OrderDialogStore(db)                    # init обязан ALTER добавить comment
+    # Строка старой таблицы без отметки времени: срок жизни снимаем, проверяется только
+    # миграция (заброшенность диалога покрыта отдельным тестом в test_order_flow).
+    s = OrderDialogStore(db, ttl_seconds=10 ** 12)   # init обязан ALTER добавить comment
     st = s.snapshot("1")                        # не должно падать
     assert st.step == "awaiting_comment" and st.qty == 2 and st.comment is None
     s.set_comment("1", "тест")

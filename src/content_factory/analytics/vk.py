@@ -118,7 +118,9 @@ def tracked_caption(caption: str, plan_id: int, *, source_key: str = "",
             f"🔎 Смотреть {label}: "
             f"{campaign_short_url(plan_id, base_url=catalog_base_url, intent=editorial_destination)}"
         )
-    if source_key and order_bot and links is not None and not editorial:
+    # Каталожный пост ведёт на карточку сайта с живым остатком; бот заказа не нужен.
+    catalog = source_key.startswith("catalog:")
+    if source_key and order_bot and links is not None and not editorial and not catalog:
         code = links.code_for_context(
             source_key, origin="vk", content_id=content_id,
         )
