@@ -959,6 +959,11 @@ VK_PLAN_CATEGORY_LABELS = {
     "heat_pumps": "тепловые насосы",
     "appliances": "бытовая техника",
     "climate": "климатические решения",
+    "air_care": "увлажнители и осушители",
+    "heaters": "обогреватели",
+    "heating": "отопление",
+    "water_heaters": "водонагреватели",
+    "floor_heating": "тёплые полы",
 }
 
 
