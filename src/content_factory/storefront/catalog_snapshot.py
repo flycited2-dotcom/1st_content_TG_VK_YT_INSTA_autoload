@@ -20,7 +20,7 @@ from urllib.parse import quote
 from content_factory.storefront.product_posts import (
     CatalogItem,
     _brand,
-    group_of,
+    group_of_item,
     parse_description,
     retail_ok,
 )
@@ -79,6 +79,9 @@ def refresh_snapshot(path: str | Path, *, max_age_hours: float = 20,
 
 _BREAKS = re.compile(r"</?(?:p|br|li|ul|ol|div|h[1-6]|tr)[^>]*>", re.I)
 _TAGS = re.compile(r"<[^>]+>")
+# Разметка на сайте склеивает слова без пробела: «летВысочайшее», «помещений.Благодаря».
+_GLUED_WORDS = re.compile(r"([а-яё])([А-ЯЁ][а-яё])")
+_NO_SPACE_AFTER_STOP = re.compile(r"([а-яё0-9][.!?])([А-ЯЁA-Z][а-яёa-z])")
 
 
 def clean_html(raw: str) -> str:
@@ -90,6 +93,8 @@ def clean_html(raw: str) -> str:
     text = html.unescape(raw or "")
     text = _BREAKS.sub(newline, text)
     text = html.unescape(_TAGS.sub("", text)).replace(chr(0xA0), " ")
+    text = _GLUED_WORDS.sub(r"\1 \2", text)
+    text = _NO_SPACE_AFTER_STOP.sub(r"\1 \2", text)
     return newline.join(line.strip() for line in text.splitlines() if line.strip())
 
 
@@ -112,7 +117,7 @@ def load_snapshot(path: str | Path) -> list[CatalogItem]:
                     f"{row['heating_min_temp']} °C".replace("-", "−")
         items.append(CatalogItem(
             id=ascii_offer_id(row["offer_id"]), url=f"{SITE}/product/{quote(row['slug'])}/",
-            price=price, group=group_of(category), category=category, picture=row["picture"],
+            price=price, group=group_of_item(category, name), category=category, picture=row["picture"],
             name=name, brand=_brand(name), prose=prose, attrs=attrs,
         ))
     return items

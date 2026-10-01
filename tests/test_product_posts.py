@@ -267,3 +267,52 @@ def test_a_line_wide_power_range_is_not_presented_as_this_models_fact():
              "Ресурс нагревательного элемента составляет 25 лет.")
 
     assert benefit_sentences(_item(prose=prose)) == ["Ресурс нагревательного элемента составляет 25 лет."]
+
+
+def test_group_follows_the_product_name_when_the_site_category_is_wrong():
+    """В базе сайта 112 радиаторов числятся «Бытовыми сплит-системами»: пост про Zehnder
+    открывался словами «Выбираете кондиционер?»."""
+    from content_factory.storefront.product_posts import group_of_item
+
+    wrong = "Бытовые сплит-системы"
+    assert group_of_item(wrong, "Радиатор трубчатый Zehnder Charleston 2200") == "radiator"
+    assert group_of_item(wrong, "Завеса воздушная Ballu BHC-U15A-PS2") == "heater"
+    assert group_of_item("Масляные радиаторы", "Радиатор масляный Ballu Blaze BOH/BL-11B") == "heater"
+    assert group_of_item("Компактные моноблочные вентиляционные установки",
+                         "Очиститель воздуха приточный Ballu ONEAIR") == "air"
+    assert group_of_item(wrong, "XIGMA Классическая сплит-система серии SKY") == "ac"
+    assert group_of_item(wrong, "Нечто неопознанное") == "ac", "нет подсказки в названии — верим категории"
+
+
+def test_a_misfiled_radiator_is_priced_and_worded_as_a_radiator(tmp_path):
+    root = _write_catalog(tmp_path, [
+        dict(id="rad", price=24000, cat=1, name="Радиатор трубчатый Zehnder Charleston 2200",
+             desc="Описание.")])
+
+    item = load_catalog(root)[0]
+
+    assert item.group == "radiator"
+
+
+def test_only_the_standard_heat_output_is_shown_for_a_radiator():
+    """Три строки «Теплоотдача» с разным Δt и числом 694.416 Вт — не довод к покупке."""
+    item = _item(group="radiator", attrs={
+        "Теплоотдача при Δt 70": "552 Вт", "Теплоотдача при Δt 50": "694.416 Вт",
+        "Теплоотдача при Δt 30": "849.6 Вт", "Гарантийный срок": "10 лет"})
+
+    bullets = feature_bullets(item)
+
+    assert bullets.count("Теплоотдача 552 Вт") == 1
+    assert not any("694" in line or "849" in line for line in bullets)
+
+
+def test_sentences_that_depend_on_a_missing_subject_are_not_used():
+    """«Он хорошо подходит…» и «Практически нечувствительны…» ссылаются на предыдущую фразу,
+    которой в посте нет: вырванные из контекста, они читаются как обрывок."""
+    prose = ("Он хорошо подходит для локального обогрева комнат площадью до 20 м2. "
+             "Практически нечувствительны к перепадам температур от -20 до +40 °С. "
+             "Прибор прогревает помещение площадью до 20 м2 за 15 минут.")
+
+    sentences = benefit_sentences(_item(prose=prose), limit=3)
+
+    assert sentences == ["Прибор прогревает помещение площадью до 20 м2 за 15 минут."]

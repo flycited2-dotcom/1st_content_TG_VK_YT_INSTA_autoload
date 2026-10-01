@@ -148,3 +148,13 @@ def test_site_descriptions_arrive_as_escaped_html_and_are_cleaned(tmp_path):
     assert "<" not in item.prose and "&lt;" not in item.prose and "&nbsp;" not in item.prose
     assert "Приточная установка подаёт свежий воздух" in item.prose
     assert "Три ступени очистки воздуха." in item.prose
+
+
+def test_glued_words_and_missing_spaces_from_site_markup_are_repaired():
+    from content_factory.storefront.catalog_snapshot import clean_html
+
+    cleaned = clean_html("&lt;b&gt;Гарантия 10 лет&lt;/b&gt;Высочайшее качество подтверждено. "
+                         "Подходит для небольших помещений.Благодаря размерам легко переносить.")
+
+    assert "лет Высочайшее" in cleaned or "лет\nВысочайшее" in cleaned
+    assert "помещений. Благодаря" in cleaned

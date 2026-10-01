@@ -46,6 +46,9 @@ _NUM_UNIT = re.compile(
     r"[0-9]+(?:[.,][0-9]+)?\s*(?:дБ|кВт|Вт|л\b|мл|м2|м²|м³|часов|час|°|%|секци|кг|лет|год|BTU)", re.I)
 _BAD_SENTENCE = re.compile(r"https?://|www\.|®|™|патент|©|\.ru\b|youtube|гарантийн[а-я]* срок", re.I)
 # Предложения про линейку, кабель и настройки — про серию или комплектацию, а не про выгоду.
+# Предложение, которое опирается на предыдущую фразу, вырванное из описания читается обрывком.
+_DEPENDENT_START = ("он ", "она ", "оно ", "они ", "его ", "её ", "их ", "такой ", "такая ",
+                    "такие ", "данный ", "данная ", "также ", "практически ", "благодаря этому")
 _SERIES_SENTENCE = re.compile(
     r"линейк|модельн|моделей|модели\b|серии\b|серия\b|типоразмер|кабел|докупа|комплектаци|"
     r"настроен|перезапуска|в комплект|2000|предназначен[а-я]* для работы|"
@@ -86,7 +89,7 @@ VALUE_FEATURES = (
     (re.compile(r"гарантийный срок", re.I), "Гарантия {v}"),
     (re.compile(r"^хладагент$", re.I), "Хладагент {v}"),
     (re.compile(r"срок службы", re.I), "Срок службы {v}"),
-    (re.compile(r"теплоотдача при", re.I), "Теплоотдача {v}"),
+    (re.compile(r"теплоотдача при \S?t ?70", re.I), "Теплоотдача {v}"),
     (re.compile(r"максимальное рабочее давление", re.I), "Рабочее давление до {v}"),
     (re.compile(r"макс\.? температура воды", re.I), "Нагрев воды до {v}"),
     (re.compile(r"макс\.? температура теплоносителя", re.I), "Теплоноситель до {v}"),
@@ -113,6 +116,31 @@ class CatalogItem:
     attrs: dict = field(default_factory=dict, compare=False)
 
 
+# Название товара надёжнее категории на сайте: в базе 112 радиаторов числятся
+# «Бытовыми сплит-системами», 21 завеса — там же. Порядок важен: масляный радиатор —
+# это обогреватель, а не радиатор отопления.
+NAME_PREFIXES = (
+    ("heater", ("радиатор масляный", "масляный радиатор", "конвектор", "обогреватель",
+                "тепловая пушка", "пушка тепловая", "тепловентилятор", "завеса",
+                "электрическая завеса", "тепловая завеса", "инфракрасн")),
+    ("radiator", ("радиатор", "секция радиатора")),
+    ("water", ("водонагреватель", "колонка", "бойлер")),
+    ("air", ("увлажнитель", "осушитель", "очиститель воздуха", "воздухоочиститель")),
+    ("floor", ("мат ", "мат нагревательный", "терморегулятор", "кабель нагревательный")),
+    ("ac", ("сплит-система", "кондиционер", "мобильный кондиционер")),
+    ("vent", ("приточ", "рекуператор", "бризер")),
+)
+
+
+def group_of_item(category: str, name: str) -> str:
+    """Группа товара: по названию, а если оно ничего не говорит — по категории сайта."""
+    low = name.strip().casefold()
+    for group, prefixes in NAME_PREFIXES:
+        if any(low.startswith(prefix) for prefix in prefixes):
+            return group
+    return group_of(category)
+
+
 def group_of(category: str) -> str:
     low = category.casefold()
     for group, needles in GROUP_BY_CATEGORY:
@@ -124,7 +152,7 @@ def group_of(category: str) -> str:
 def retail_ok(category: str, name: str, price: int) -> bool:
     """Годится ли позиция для розничной витрины: известная группа, не промышленная,
     не аксессуар и цена в пределах своей группы. Общая для всех источников каталога."""
-    group = group_of(category)
+    group = group_of_item(category, name)
     if group == "other" or price <= 0:
         return False
     if (_NOT_FOR_RETAIL_CATEGORY.search(category) or _NOT_FOR_RETAIL_NAME.search(name)
@@ -167,8 +195,8 @@ def load_catalog(directory: str | Path) -> list[CatalogItem]:
             except ValueError:
                 continue
             category = categories.get(get("categoryId"), "")
-            group = group_of(category)
             name = get("name")
+            group = group_of_item(category, name)
             if not (get("picture") and get("url") and retail_ok(category, name, price)):
                 continue
             prose, attrs = parse_description(get("description"))
@@ -200,6 +228,8 @@ def benefit_sentences(item: CatalogItem, limit: int = 2) -> list[str]:
                     or _SERIES_SENTENCE.search(sentence):
                 continue
             if not sentence[0].isupper() or sentence[-1] not in ".!?":
+                continue
+            if sentence.casefold().startswith(_DEPENDENT_START):
                 continue
             if sentence.casefold() in seen or sentence.casefold().startswith(("описание", "характеристики")):
                 continue
