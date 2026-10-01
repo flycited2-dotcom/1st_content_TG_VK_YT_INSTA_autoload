@@ -114,6 +114,8 @@ class CatalogItem:
     brand: str
     prose: str
     attrs: dict = field(default_factory=dict, compare=False)
+    # Остальные фото карточки: первое бывает «белое на белом» или невыразительным.
+    pictures: tuple = field(default=(), compare=False)
 
 
 # Название товара надёжнее категории на сайте: в базе 112 радиаторов числятся
@@ -357,6 +359,10 @@ HOOKS = {
         ("", "Быстро прогреть гараж, склад или стройку? Для этого и существует тепловая пушка. Вот модель в наличии."),
         ("", "Тепловая пушка — когда тепло нужно быстро и сразу. Вот вариант в наличии, цена открытая."),
     ),
+    "radiator:convector": (
+        ("", "Меняете отопление или достраиваете дом? Вот водяной конвектор, он есть в наличии."),
+        ("", "Тепло от системы отопления, но в другом формате: водяной конвектор вместо привычной батареи."),
+    ),
     "radiator": (
         ("sections", "Радиатор на {sections_text}: замена старой батареи без лишней возни. Модель в наличии."),
         ("", "Меняете отопление или достраиваете дом? Вот радиатор, который есть в наличии и не придётся ждать поставку."),
@@ -384,7 +390,7 @@ _ASK = (
 CTAS = {
     "ac": ("Привезём и установим по всему Крыму.", "Доставка и монтаж по Крыму, консультация бесплатная.") + _ASK,
     "vent": ("Привезём и установим по всему Крыму.", "Доставка и монтаж по Крыму, консультация бесплатная.") + _ASK,
-    "radiator": ("Доставим по Крыму, поможем с подбором секций.",) + _ASK,
+    "radiator": ("Доставим по Крыму, поможем с подбором.",) + _ASK,
     "water": ("Доставим по Крыму.",) + _ASK,
     "floor": ("Доставим по Крыму и подскажем с монтажом.",) + _ASK,
     "heater": ("Доставим по Крыму.",) + _ASK,
@@ -399,6 +405,8 @@ def _hook_key(item: CatalogItem) -> str:
         return "heater:curtain"
     if item.group == "heater" and "пушк" in low:
         return "heater:gun"
+    if item.group == "radiator" and item.name.strip().casefold().startswith("конвектор"):
+        return "radiator:convector"
     return item.group
 
 
@@ -535,29 +543,64 @@ PHOTO_SIZE = 1080
 # проступает вокруг товара видимой рамкой.
 PHOTO_BACKGROUND = (255, 255, 255)
 MIN_SOURCE_SIDE = 280
+MAX_UPSCALE = 3.0
 
 
-def prepare_photo(client: httpx.Client, url: str, destination: str | Path) -> Path | None:
-    """Скачать фото производителя и положить на светлый квадрат; None — не годится."""
+def _ink_share(image) -> float:
+    """Доля заметно непустых пикселей: у «белого на белом» она около нуля."""
+    gray = image.convert("L").resize((200, 200))
+    pixels = list(gray.getdata())
+    return sum(1 for value in pixels if value < 235) / len(pixels)
+
+
+def prepare_photo(client: httpx.Client, urls, destination: str | Path) -> Path | None:
+    """Выбрать лучшее из фото производителя и положить на белый квадрат.
+
+    Из нескольких снимков берётся самый выразительный (больше всего «чернил» на белом),
+    затем кадр обрезается до содержимого, чтобы товар занимал рамку, а не терялся в
+    пустом поле. None — ни один снимок не годится.
+    """
     from io import BytesIO
 
     from PIL import Image
 
-    try:
-        response = client.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=40,
-                              follow_redirects=True)
-        response.raise_for_status()
-        source = Image.open(BytesIO(response.content))
-        source.load()
-    except (httpx.HTTPError, OSError, ValueError):
+    candidates = [urls] if isinstance(urls, str) else [u for u in urls if u]
+    best = None
+    for url in dict.fromkeys(candidates):
+        try:
+            response = client.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=40,
+                                  follow_redirects=True)
+            response.raise_for_status()
+            source = Image.open(BytesIO(response.content))
+            source.load()
+        except (httpx.HTTPError, OSError, ValueError):
+            continue
+        if min(source.size) < MIN_SOURCE_SIDE:
+            continue
+        rgba = source.convert("RGBA")
+        flat = Image.new("RGB", rgba.size, (255, 255, 255))
+        flat.paste(rgba, mask=rgba.split()[3])
+        score = _ink_share(flat)
+        if best is None or score > best[0]:
+            best = (score, flat)
+    if best is None:
         return None
-    if min(source.size) < MIN_SOURCE_SIDE:
-        return None
-    rgba = source.convert("RGBA")
+    flat = best[1]
+    # Обрезка до содержимого: всё светлее 245 считаем фоном.
+    box = flat.convert("L").point(lambda value: 255 if value < 245 else 0).getbbox()
+    if box:
+        margin = int(0.04 * max(flat.size))
+        box = (max(0, box[0] - margin), max(0, box[1] - margin),
+               min(flat.width, box[2] + margin), min(flat.height, box[3] + margin))
+        flat = flat.crop(box)
     inner = int(PHOTO_SIZE * 0.84)
-    rgba.thumbnail((inner, inner), Image.Resampling.LANCZOS)
+    # thumbnail только уменьшает, а обрезанный товар часто меньше рамки: растягиваем,
+    # но не более чем втрое, чтобы не размыть исходный снимок.
+    scale = min(inner / flat.width, inner / flat.height, MAX_UPSCALE)
+    flat = flat.resize((max(1, round(flat.width * scale)), max(1, round(flat.height * scale))),
+                       Image.Resampling.LANCZOS)
     canvas = Image.new("RGB", (PHOTO_SIZE, PHOTO_SIZE), PHOTO_BACKGROUND)
-    canvas.paste(rgba, ((PHOTO_SIZE - rgba.width) // 2, (PHOTO_SIZE - rgba.height) // 2), rgba)
+    canvas.paste(flat, ((PHOTO_SIZE - flat.width) // 2, (PHOTO_SIZE - flat.height) // 2))
     out = Path(destination)
     out.parent.mkdir(parents=True, exist_ok=True)
     canvas.save(out, "JPEG", quality=90)

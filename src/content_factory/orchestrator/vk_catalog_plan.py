@@ -126,7 +126,7 @@ def materialize_catalog_plan(store: VkContentPlanStore, items: list[CatalogItem]
                 skipped.add(item.id)
                 continue
             image = photo_dir / f"{_safe(item.id)}.jpg"
-            if not image.is_file() and photo(client, item.picture, image) is None:
+            if not image.is_file() and photo(client, [item.picture, *item.pictures], image) is None:
                 skipped.add(item.id)
                 continue
             candidate = VkPlanCandidate(

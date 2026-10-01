@@ -120,5 +120,6 @@ def load_snapshot(path: str | Path) -> list[CatalogItem]:
             id=ascii_offer_id(row["offer_id"]), url=f"{SITE}/product/{quote(row['slug'])}/",
             price=price, group=refine_group(group_of_item(category, name), attrs), category=category, picture=row["picture"],
             name=name, brand=_brand(name), prose=prose, attrs=attrs,
+            pictures=tuple(row.get("pictures") or ()),
         ))
     return items

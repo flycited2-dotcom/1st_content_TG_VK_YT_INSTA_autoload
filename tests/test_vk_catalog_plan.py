@@ -72,7 +72,8 @@ def test_out_of_stock_or_photoless_items_are_skipped_not_posted(tmp_path):
         return LiveInfo(price=item.price, in_stock=item.id != "id0")
 
     def photo(client, url, destination):
-        return None if url.endswith("/1.png") else _photo_ok(client, url, destination)
+        first = url[0] if isinstance(url, (list, tuple)) else url
+        return None if first.endswith("/1.png") else _photo_ok(client, url, destination)
 
     materialize_catalog_plan(store, _items(), now, client=None, photo_dir=tmp_path / "p",
                              fill_editorial_gaps=False, fetch=fetch, photo=photo)

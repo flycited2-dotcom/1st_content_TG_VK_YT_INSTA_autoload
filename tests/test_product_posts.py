@@ -333,3 +333,59 @@ def test_a_water_convector_is_a_heating_system_part_not_a_room_heater(tmp_path):
         id="conv", price=17000, cat=1, name="Конвектор напольный Royal Thermo STEP",
         desc="Описание.\n\nХарактеристики:\n• Тип теплоносителя: Вода\n• Максимальное рабочее давление: 10")])
     assert load_catalog(root)[0].group == "radiator"
+
+
+def _png_of(size, ink_box=None, ink=(30, 30, 30)):
+    """Белый фон; ink_box=(x0, y0, x1, y1) — тёмный прямоугольник-«товар»."""
+    buffer = BytesIO()
+    image = Image.new("RGB", size, (255, 255, 255))
+    if ink_box:
+        image.paste(Image.new("RGB", (ink_box[2] - ink_box[0], ink_box[3] - ink_box[1]), ink), ink_box[:2])
+    image.save(buffer, "PNG")
+    return buffer.getvalue()
+
+
+def _client_with(images):
+    return httpx.Client(transport=httpx.MockTransport(lambda request: httpx.Response(
+        200, content=images[str(request.url)])))
+
+
+def test_best_of_several_photos_wins_over_white_on_white(tmp_path):
+    """Первое фото приточки BREZZA — белый корпус на белом: товара почти не видно.
+    Из четырёх снимков берётся тот, где товар различим."""
+    images = {
+        "https://img/front.png": _png_of((900, 900), (300, 300, 600, 600), ink=(250, 250, 250)),
+        "https://img/angle.png": _png_of((900, 900), (200, 250, 700, 650), ink=(60, 60, 70)),
+    }
+    with _client_with(images) as client:
+        path = prepare_photo(client, ["https://img/front.png", "https://img/angle.png"],
+                             tmp_path / "p.jpg")
+
+    with Image.open(path) as result:
+        center = result.getpixel((540, 540))
+    assert sum(center) < 400, "выбран снимок с различимым товаром, а не белое на белом"
+
+
+def test_photo_is_cropped_to_the_product_so_it_fills_the_frame(tmp_path):
+    """Конвектор-рендер занимал меньше половины кадра в пустом белом поле."""
+    # Товар занимает лишь 30% ширины исходного снимка; без обрезки в кадре он остался бы
+    # таким же мелким (около 270 пикселей из 1080), после обрезки растягивается на рамку.
+    images = {"https://img/a.png": _png_of((1000, 1000), (350, 450, 650, 560))}
+    with _client_with(images) as client:
+        path = prepare_photo(client, "https://img/a.png", tmp_path / "p.jpg")
+
+    with Image.open(path) as result:
+        gray = result.convert("L")
+        box = gray.point(lambda value: 255 if value < 200 else 0).getbbox()
+    assert box[2] - box[0] >= 0.6 * 1080, "товар занимает основную часть ширины кадра"
+
+
+def test_hydronic_convector_hook_and_cta_do_not_talk_about_radiator_sections():
+    item = _item(group="radiator", category="Конвекторы", name="Конвектор напольный Royal Thermo STEP",
+                 attrs={"Гарантийный срок": "10 лет", "Теплоотдача при Δt 70": "1140 Вт",
+                        "Максимальное рабочее давление": "10 бар", "Срок службы": "25 лет"})
+
+    text = write_post(item)
+
+    assert "радиатор" not in text.casefold().split("конвектор напольный")[0], "крючок называет радиатором конвектор"
+    assert "секци" not in text.casefold()

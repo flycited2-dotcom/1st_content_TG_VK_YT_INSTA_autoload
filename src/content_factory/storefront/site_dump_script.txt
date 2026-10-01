@@ -29,6 +29,7 @@ for product in queryset:
         "brand": product.brand.title if product.brand else "",
         "description": product.description,
         "picture": images[0],
+        "pictures": images[:4],
         "specs": specs,
         "is_heat_pump": bool(product.is_heat_pump),
         "heating_min_temp": product.heating_min_temp,
