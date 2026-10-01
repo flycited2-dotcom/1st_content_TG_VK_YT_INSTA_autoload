@@ -116,3 +116,51 @@ def test_refresh_blocks_vanished_items_and_reprices_changed_ones(tmp_path):
     assert "50 000 ₽" in after.caption
     assert after.status == "planned" and after.telegram_message_id is None, \
         "показанная карточка с новой ценой возвращается на ревью"
+
+
+def test_realign_moves_expert_posts_out_of_product_slots(tmp_path):
+    """До чередования эксперты занимали все слоты подряд и товарам места не оставалось."""
+    from content_factory.orchestrator.vk_content_plan import VkPlanCandidate
+
+    store = VkContentPlanStore(tmp_path / "plan.db")
+    now = datetime(2026, 10, 1, 8, 0)
+    slots = plan_slots(now, horizon_days=14)
+    for index, slot in enumerate(slots[:10]):
+        store.add(VkPlanCandidate(
+            source_key=f"editorial:topic{index}:{index}", source_ts=1.0, caption=f"Текст {index}",
+            card_path="/x.png", category="ups", brand="EDITORIAL", content_type="useful"), slot)
+
+    result = store.realign_editorial_slots(slots, int(now.timestamp()))
+
+    plan = store.list()
+    active = [item for item in plan if item.status != "superseded"]
+    assert all(slot_kind(item.due_at) == "editorial" for item in active)
+    assert len(active) + len(result["dropped"]) == 10
+    assert store.realign_editorial_slots(slots, int(now.timestamp())) == {"moved": [], "dropped": []}, \
+        "повторный запуск ничего не меняет"
+
+
+def test_realign_keeps_seasonal_posts_and_drops_old_checklists_first(tmp_path):
+    from content_factory.orchestrator.vk_content_plan import VkPlanCandidate
+
+    store = VkContentPlanStore(tmp_path / "plan.db")
+    now = datetime(2026, 10, 1, 8, 0)
+    slots = plan_slots(now, horizon_days=14)
+    editorial_slots = [s for s in slots if slot_kind(s) == "editorial"]
+    # Мест ровно на столько, сколько экспертных слотов; последним ставим сезонный пост.
+    for index in range(len(editorial_slots)):
+        store.add(VkPlanCandidate(
+            source_key=f"editorial:old{index}:{index}", source_ts=1.0, caption=f"Старый {index}",
+            card_path="/x.png", category="ups", brand="EDITORIAL", content_type="useful"),
+            editorial_slots[index])
+    store.add(VkPlanCandidate(
+        source_key="editorial:season-x:99", source_ts=1.0, caption="Сезонный",
+        card_path="/x.png", category="ups", brand="EDITORIAL", content_type="useful"), slots[-1])
+
+    rank = lambda item: 0 if "season" in item.source_key else 2  # noqa: E731
+    result = store.realign_editorial_slots(slots, int(now.timestamp()), rank=rank)
+
+    season = [i for i in store.list() if "season" in i.source_key][0]
+    assert season.status != "superseded" and slot_kind(season.due_at) == "editorial"
+    assert len(result["dropped"]) == 1
+    assert "season" not in store.get(result["dropped"][0]).source_key

@@ -618,6 +618,43 @@ class VkContentPlanStore:
             self.resolve_revision(item_id)
         return changed
 
+    def realign_editorial_slots(self, slots: list[int], now: int,
+                                rank=None) -> dict[str, list[int]]:
+        """Пересадить ещё не показанные экспертные посты в экспертные слоты.
+
+        Пока слоты не чередовались, эксперты занимали их подряд, и товарам не
+        оставалось места. Лишние (экспертных слотов меньше, чем постов) снимаются
+        и вернутся позже; показанные владельцу и одобренные не двигаются. rank (меньше —
+        важнее) решает, кто сохранит место: сезонные посты впереди старых чек-листов.
+        """
+        items = self.list()
+        rank = rank or (lambda item: 0)
+        movable = sorted(
+            (i for i in items if i.content_type != "product"
+             and i.status in {"visual_pending", "planned"} and i.due_at > now),
+            key=lambda i: (rank(i), i.due_at))
+        movable_ids = {i.id for i in movable}
+        fixed = {i.due_at for i in items
+                 if i.status in ACTIVE_STATUSES and i.id not in movable_ids}
+        free = [s for s in slots if s > now and slot_kind(s) == "editorial" and s not in fixed]
+        moved: list[int] = []
+        dropped: list[int] = []
+        stamp = int(time.time())
+        with self._connect() as connection:
+            for item, slot in zip(movable, free):
+                if item.due_at != slot:
+                    connection.execute(
+                        "UPDATE vk_content_plan SET due_at=?,updated_at=? WHERE id=?",
+                        (slot, stamp, item.id))
+                    moved.append(item.id)
+            for item in movable[len(free):]:
+                cursor = connection.execute(
+                    "UPDATE vk_content_plan SET status='superseded',updated_at=? WHERE id=? "
+                    "AND status IN ('visual_pending','planned')", (stamp, item.id))
+                if cursor.rowcount:
+                    dropped.append(item.id)
+        return {"moved": moved, "dropped": dropped}
+
     def update_caption(self, item_id: int, caption: str) -> bool:
         """Заменить текст ещё не опубликованного поста; показанный или одобренный
         возвращается на ревью, иначе владелец одобрил бы один текст, а вышел другой."""
@@ -1103,7 +1140,8 @@ def slot_ordinal(due_at: int) -> int:
 
 
 def slot_kind(due_at: int) -> str:
-    """Каждый второй слот — товарный: ровно половина ленты, время суток чередуется."""
+    """Товарные и экспертные посты идут строго по очереди: ровно половина ленты на каждый
+    вид, и два однотипных поста подряд не встают. Товары всегда в дневном слоте."""
     return "product" if slot_ordinal(due_at) % 2 == 0 else "editorial"
 
 
@@ -1249,6 +1287,14 @@ def run_cycle(*, store: VkContentPlanStore, source_db: str, telegram_token: str,
             )
             from content_factory.storefront.product_posts import load_catalog
             result["catalog_refresh"] = refresh_catalog_items(store, client, now)
+            topic_rank = {}
+            if Path(editorial_knowledge).is_file():
+                for idea in load_ideas(editorial_knowledge)[0]:
+                    topic_rank[idea.id] = (0 if idea.months else 2 if idea.format == "checklist" else 1)
+            result["realigned"] = store.realign_editorial_slots(
+                plan_slots(now, horizon_days=14), int(now.timestamp()),
+                rank=lambda item: topic_rank.get(item.source_key.split(":")[1], 1)
+                if item.source_key.startswith("editorial:") else 1)
             if Path(editorial_knowledge).is_file():
                 result["planned"].extend(materialize_editorial_plan(
                     store, editorial_knowledge, now, only_editorial_slots=True,

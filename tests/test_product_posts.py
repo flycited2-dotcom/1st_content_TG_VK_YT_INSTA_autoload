@@ -173,3 +173,25 @@ def test_photo_is_centered_on_a_light_square_and_tiny_sources_are_rejected(tmp_p
     with Image.open(path) as image:
         assert image.size == (1080, 1080)
         assert image.getpixel((5, 5)) == (246, 247, 249) or max(image.getpixel((5, 5))) > 235
+
+
+def test_accessories_and_cheap_junk_stay_off_the_shop_window(tmp_path):
+    root = _write_catalog(tmp_path, [
+        dict(id="ok", price=25000, cat=1, name="Сплит-система A", desc="Описание."),
+        dict(id="drain", price=593, cat=1, name="Нагреватель дренажа BALLU ND-500мм", desc="Описание."),
+        dict(id="cheap", price=900, cat=1, name="Сплит-система дешёвая", desc="Описание."),
+        dict(id="bracket", price=4000, cat=1, name="Кронштейн для наружного блока", desc="Описание."),
+    ])
+
+    assert [item.id for item in load_catalog(root)] == ["ok"]
+
+
+def test_filler_without_numbers_does_not_make_a_post():
+    fluff = "Модель отличается классическим элегантным дизайном и гармонично вписывается в интерьер."
+
+    assert benefit_sentences(_item(prose=fluff)) == [fluff]
+    assert not is_postable(_item(prose=fluff))
+    concrete = f"{fluff} Бак объёмом 9,4 л позволяет заливать воду раз в сутки."
+    assert benefit_sentences(_item(prose=concrete)) == [
+        "Бак объёмом 9,4 л позволяет заливать воду раз в сутки."]
+    assert is_postable(_item(prose=concrete))
