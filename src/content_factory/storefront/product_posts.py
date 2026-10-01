@@ -544,6 +544,8 @@ PHOTO_SIZE = 1080
 PHOTO_BACKGROUND = (255, 255, 255)
 MIN_SOURCE_SIDE = 280
 MAX_UPSCALE = 3.0
+# Ниже этой доли заметных пикселей снимок считается «белым на белом».
+MIN_INK_SHARE = 0.04
 
 
 def _ink_share(image) -> float:
@@ -583,6 +585,12 @@ def prepare_photo(client: httpx.Client, urls, destination: str | Path) -> Path |
         score = _ink_share(flat)
         if best is None or score > best[0]:
             best = (score, flat)
+        if score >= MIN_INK_SHARE:
+            # Фото производителя идут по убыванию «витринности»: первое достаточно
+            # контрастное берём. Самый «чёрный» снимок побеждать нельзя: им бывает
+            # чертёж с размерными стрелками, а не фото товара.
+            best = (score, flat)
+            break
     if best is None:
         return None
     flat = best[1]

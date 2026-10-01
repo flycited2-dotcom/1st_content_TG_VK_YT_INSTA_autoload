@@ -389,3 +389,21 @@ def test_hydronic_convector_hook_and_cta_do_not_talk_about_radiator_sections():
 
     assert "радиатор" not in text.casefold().split("конвектор напольный")[0], "крючок называет радиатором конвектор"
     assert "секци" not in text.casefold()
+
+
+def test_a_contrasty_first_photo_is_kept_and_a_dimension_drawing_never_wins(tmp_path):
+    """Для конвектора «побеждал» чертёж со стрелками и цифрами 130/230: у него больше всего
+    чернил. Первое достаточно контрастное фото остаётся, чертёж не выбирается."""
+    render = _png_of((900, 900), (150, 400, 750, 520), ink=(40, 40, 40))
+    drawing = _png_of((900, 900), (100, 200, 800, 700), ink=(0, 0, 0))   # «больше чернил»
+    images = {"https://img/render.png": render, "https://img/drawing.png": drawing}
+
+    with _client_with(images) as client:
+        path = prepare_photo(client, ["https://img/render.png", "https://img/drawing.png"],
+                             tmp_path / "p.jpg")
+
+    with Image.open(path) as result:
+        gray = result.convert("L")
+        box = gray.point(lambda value: 255 if value < 200 else 0).getbbox()
+    height = box[3] - box[1]
+    assert height < 0.5 * 1080, "выбрано низкое горизонтальное фото-рендер, а не квадратный чертёж"
