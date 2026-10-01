@@ -195,3 +195,27 @@ def test_filler_without_numbers_does_not_make_a_post():
     assert benefit_sentences(_item(prose=concrete)) == [
         "Бак объёмом 9,4 л позволяет заливать воду раз в сутки."]
     assert is_postable(_item(prose=concrete))
+
+
+def test_section_count_is_declined_properly():
+    radiator = _item(group="radiator", category="Радиаторы отопления",
+                     name="Радиатор Royal Thermo - 4 секц.",
+                     prose="Теплоотдача секции выше на 5%, нагрев идёт быстрее.")
+    text = write_post(radiator)
+
+    assert "4 секций" not in text
+    twelve = write_post(_item(group="radiator", category="Радиаторы отопления",
+                              name="Радиатор Royal Thermo - 12 секц.", prose=radiator.prose))
+    for sample, word in ((text, "4 секции"), (twelve, "12 секций")):
+        assert word in sample or "секц" not in sample.split("\n")[0]
+
+
+def test_heater_subtypes_get_their_own_hooks():
+    prose = "Снижает теплопотери на 80% при открытом проёме."
+    curtain = write_post(_item(group="heater", category="Тепловые завесы", prose=prose))
+    gun = write_post(_item(group="heater", category="Тепловые пушки", prose=prose))
+
+    assert "завес" in curtain.split("\n")[0].casefold()
+    assert "пушк" in gun.split("\n")[0].casefold()
+    assert "условия эксплуатации" not in write_post(
+        _item(prose="Условия эксплуатации: температура окружающего воздуха от -20 °С до +40 °С."))

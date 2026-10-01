@@ -49,7 +49,8 @@ _BAD_SENTENCE = re.compile(r"https?://|www\.|®|™|патент|©|\.ru\b|youtu
 _SERIES_SENTENCE = re.compile(
     r"линейк|модельн|моделей|модели\b|серии\b|серия\b|типоразмер|кабел|докупа|комплектаци|"
     r"настроен|перезапуска|в комплект|2000|предназначен[а-я]* для работы|"
-    r"бренд|компани|продукты |продукци|производств[а-я]* контрол|этапах производства", re.I)
+    r"бренд|компани|продукты |продукци|производств[а-я]* контрол|этапах производства|"
+    r"условия эксплуатации|окружающего воздуха|относительной влажности", re.I)
 
 # Промышленные и нестандартные позиции — не для розничной группы.
 _NOT_FOR_RETAIL_NAME = re.compile(
@@ -246,6 +247,7 @@ def facts_for_hook(item: CatalogItem) -> dict:
         "liters": _first(r"([0-9]{2,3})\s*л\b", item.name),
         "kw": _first(r"([0-9](?:[.,][0-9]+)?)\s*кВт", item.name, item.prose),
         "sections": _first(r"([0-9]{1,2})\s*секц", item.name),
+        "sections_text": "",
         "noise": _first(r"от\s+([0-9]{2})\s*дБ", item.prose),
     }
 
@@ -277,8 +279,16 @@ HOOKS = {
         ("", "Зябко по утрам и вечерам? Иногда проще согреть одну комнату, чем ждать тепла во всём доме."),
         ("", "Дача, гараж, мастерская или детская: вот обогреватель, который есть в наличии прямо сейчас."),
     ),
+    "heater:curtain": (
+        ("", "Каждый раз, когда открывается дверь, тепло уходит на улицу. Тепловая завеса закрывает проём воздушной стеной."),
+        ("", "Входная группа магазина, склада или мастерской — самое холодное место. Вот тепловая завеса в наличии."),
+    ),
+    "heater:gun": (
+        ("", "Быстро прогреть гараж, склад или стройку? Для этого и существует тепловая пушка. Вот модель в наличии."),
+        ("", "Тепловая пушка — когда тепло нужно быстро и сразу. Вот вариант в наличии, цена открытая."),
+    ),
     "radiator": (
-        ("sections", "Радиатор на {sections} секций: замена старой батареи без лишней возни. Модель в наличии."),
+        ("sections", "Радиатор на {sections_text}: замена старой батареи без лишней возни. Модель в наличии."),
         ("", "Меняете отопление или достраиваете дом? Вот радиатор, который есть в наличии и не придётся ждать поставку."),
         ("", "Тёплая зима начинается с хорошего радиатора. Вот модель в наличии с ценой без сюрпризов."),
         ("", "Батарея — это на годы, поэтому выбирать её стоит спокойно. Вот модель, которую можно посмотреть и взять."),
@@ -312,6 +322,23 @@ CTAS = {
 }
 
 
+def _hook_key(item: CatalogItem) -> str:
+    """Обогреватели бывают разные: у завесы и пушки свои сценарии, не «дача и гараж»."""
+    low = item.category.casefold()
+    if item.group == "heater" and "завес" in low:
+        return "heater:curtain"
+    if item.group == "heater" and "пушк" in low:
+        return "heater:gun"
+    return item.group
+
+
+def _sections_word(count: str) -> str:
+    number = int(count)
+    if 11 <= number % 100 <= 14:
+        return "секций"
+    return {1: "секция", 2: "секции", 3: "секции", 4: "секции"}.get(number % 10, "секций")
+
+
 def _variant(item: CatalogItem, size: int, salt: str = "") -> int:
     return int(hashlib.sha1((item.id + salt).encode()).hexdigest(), 16) % size
 
@@ -320,7 +347,10 @@ def write_post(item: CatalogItem, price: int | None = None) -> str:
     """Собрать текст товарного поста; ссылка на карточку добавляется отдельно."""
     price = price or item.price
     facts = facts_for_hook(item)
-    options = [text for need, text in HOOKS.get(item.group, ()) if not need or facts.get(need)]
+    if facts["sections"]:
+        facts["sections_text"] = f"{facts['sections']} {_sections_word(facts['sections'])}"
+    hooks = HOOKS.get(_hook_key(item), HOOKS.get(item.group, ()))
+    options = [text for need, text in hooks if not need or facts.get(need)]
     hook = options[_variant(item, len(options), "hook")].format(**facts) if options else ""
     parts = [hook, "", item.name, f"💎 {money(price)} · {CITY}"]
     sentences = benefit_sentences(item)

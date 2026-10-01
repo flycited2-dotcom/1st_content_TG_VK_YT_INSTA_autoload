@@ -32,7 +32,9 @@ def test_editorial_pipeline_builds_only_sourced_non_product_posts(tmp_path):
     ideas_by_id = {idea.id: idea for idea in ideas}
     photos = [d for d in drafts if not ideas_by_id[d.idea_id].card_big]
     cards = [d for d in drafts if ideas_by_id[d.idea_id].card_big]
-    assert photos and cards
+    # Сейчас у всех тем фото: тёмные карточки владелец забраковал. Механизм карточки
+    # остаётся и проверяется отдельно, поэтому пустой список карточек допустим.
+    assert photos
     assert all("Use case: photorealistic-natural" in draft.visual_prompt for draft in photos)
     assert all("no watermark" in draft.visual_prompt for draft in photos)
     assert all(draft.visual_prompt.startswith("Типографская карточка") for draft in cards)
