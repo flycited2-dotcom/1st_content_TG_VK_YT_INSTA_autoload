@@ -167,22 +167,58 @@ def test_vk_group_can_schedule_text_for_manual_photo_flow():
     assert result.payload["publish_date"] == 1787657400
 
 
-def test_vk_edits_existing_post_without_replacing_attachments():
+def _edit_transport(attachments, calls, *, get_by_id_error=False):
+    """Стенд VK: wall.getById отдаёт вложения записи, wall.edit запоминается."""
     def handler(request):
-        assert request.url.path.endswith("wall.edit")
+        method = request.url.path.rsplit("/", 1)[-1]
         form = {k: v[0] for k, v in parse_qs(request.content.decode()).items()}
-        assert form["owner_id"] == "-241020718"
-        assert form["post_id"] == "19"
-        assert form["publish_date"] == "1787931000"
-        assert form["message"] == "Обновлённый пост"
-        assert "attachments" not in form
+        calls.append((method, form))
+        if method == "wall.getById":
+            if get_by_id_error:
+                return httpx.Response(200, json={"error": {"error_code": 6, "error_msg": "Too many"}})
+            return httpx.Response(200, json={"response": {"items": [{"attachments": attachments}]}})
         return httpx.Response(200, json={"response": 1})
+    return httpx.Client(transport=httpx.MockTransport(handler))
 
-    http = httpx.Client(transport=httpx.MockTransport(handler))
+
+def test_vk_edit_keeps_attachments_by_passing_them_explicitly():
+    """wall.edit без attachments стирает фото записи (проверено на боевой стене), поэтому
+    текущие вложения читаются и передаются в правку явно."""
+    calls = []
+    http = _edit_transport([
+        {"type": "photo", "photo": {"owner_id": -241020718, "id": 456, "access_key": "abc"}},
+        {"type": "link", "link": {"url": "https://splithome.ru/product/x/"}},
+    ], calls)
     result = VkPublisher("TOKEN", -241020718, dry_run=False, http=http).edit_text(
         19, "Обновлённый пост", publish_at=1787931000,
     )
     assert result.ok and result.post_id == 19
+    assert [name for name, _ in calls] == ["wall.getById", "wall.edit"]
+    assert calls[0][1]["posts"] == "-241020718_19"
+    form = calls[1][1]
+    assert form["owner_id"] == "-241020718" and form["post_id"] == "19"
+    assert form["publish_date"] == "1787931000"
+    assert form["message"] == "Обновлённый пост"
+    assert form["attachments"] == "photo-241020718_456_abc,https://splithome.ru/product/x/"
+
+
+def test_vk_edit_of_text_only_post_sends_no_attachments():
+    calls = []
+    http = _edit_transport([], calls)
+    result = VkPublisher("TOKEN", -241020718, dry_run=False, http=http).edit_text(
+        19, "Обновлённый пост")
+    assert result.ok
+    assert "attachments" not in calls[-1][1]
+
+
+def test_vk_edit_is_refused_when_attachments_cannot_be_read():
+    """Не вслепую: если вложения прочитать не удалось, запись не правится, иначе потеряется фото."""
+    calls = []
+    http = _edit_transport([], calls, get_by_id_error=True)
+    result = VkPublisher("TOKEN", -241020718, dry_run=False, http=http).edit_text(
+        19, "Обновлённый пост")
+    assert not result.ok and "6" in (result.error or "")
+    assert [name for name, _ in calls] == ["wall.getById"]
 
 
 def test_build_vk_preview_from_review_record(tmp_path):

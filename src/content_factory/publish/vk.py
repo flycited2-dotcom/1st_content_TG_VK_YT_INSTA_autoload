@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import html
+import mimetypes
 import re
 from dataclasses import dataclass
 from html.parser import HTMLParser
@@ -152,7 +153,9 @@ class VkPublisher:
             upload = self._api("photos.getWallUploadServer", target)
             with path.open("rb") as fh:
                 upload_response = self.http.post(
-                    upload["upload_url"], files={"photo": (path.name, fh.read(), "image/png")})
+                    upload["upload_url"],
+                    files={"photo": (path.name, fh.read(),
+                                     mimetypes.guess_type(path.name)[0] or "image/png")})
             upload_response.raise_for_status()
             uploaded = upload_response.json()
             save_params = {k: uploaded[k] for k in ("server", "photo", "hash")}
@@ -206,12 +209,29 @@ class VkPublisher:
         except (KeyError, ValueError, RuntimeError, httpx.HTTPError) as exc:
             return VkPublishResult(ok=False, error=str(exc), payload=payload)
 
+    def _attachments_of(self, post_id: int) -> str:
+        """Вложения записи в формате параметра ``attachments`` (через запятую)."""
+        got = self._api("wall.getById", {"posts": f"{self.owner_id}_{int(post_id)}"})
+        items = got.get("items", got) if isinstance(got, dict) else got
+        parts: list[str] = []
+        for attachment in (items[0].get("attachments") or []) if items else []:
+            kind = attachment.get("type")
+            body = attachment.get(kind) or {}
+            if kind == "link":
+                if body.get("url"):
+                    parts.append(body["url"])
+            elif body.get("owner_id") is not None and body.get("id") is not None:
+                ref = f"{kind}{body['owner_id']}_{body['id']}"
+                parts.append(ref + (f"_{body['access_key']}" if body.get("access_key") else ""))
+        return ",".join(parts)
+
     def edit_text(self, post_id: int, caption: str,
                   *, publish_at: int | None = None) -> VkPublishResult:
         """Обновить текст существующей или отложенной записи без создания дубля.
 
-        ``attachments`` намеренно не передаётся: уже прикреплённая вручную или
-        автоматически фотография остаётся частью существующей записи.
+        wall.edit без ``attachments`` стирает вложения записи (проверено на боевой стене:
+        фото пропало после правки текста). Поэтому текущие вложения читаются и передаются
+        явно. Не удалось прочитать — запись не правим: лучше старый текст, чем пост без фото.
         """
         payload = {
             "owner_id": self.owner_id,
@@ -225,7 +245,8 @@ class VkPublisher:
         if not self.token:
             return VkPublishResult(ok=False, error="VK_ACCESS_TOKEN не задан", payload=payload)
         try:
-            self._api("wall.edit", payload)
+            attachments = self._attachments_of(post_id)
+            self._api("wall.edit", {**payload, **({"attachments": attachments} if attachments else {})})
             return VkPublishResult(ok=True, post_id=int(post_id), payload=payload)
-        except (ValueError, RuntimeError, httpx.HTTPError) as exc:
+        except (KeyError, IndexError, ValueError, RuntimeError, httpx.HTTPError) as exc:
             return VkPublishResult(ok=False, error=str(exc), payload=payload)
