@@ -86,6 +86,109 @@ def test_vk_publish_uploads_photo_then_posts_wall(tmp_path):
                      "/method/photos.saveWallPhoto", "/method/wall.post"]
 
 
+def _flaky_upload_transport(save_errors, calls, upload_statuses=()):
+    """VK при сбое загрузки отдаёт photo=[] и saveWallPhoto отвечает 100: photo is undefined.
+    save_errors — коды ошибок для первых вызовов saveWallPhoto, дальше успех;
+    upload_statuses — HTTP-статусы первых ответов сервера загрузки (504 и т.п.)."""
+    saves = iter(save_errors)
+    uploads = iter(upload_statuses)
+
+    def handler(request):
+        name = request.url.path.rsplit("/", 1)[-1] if request.url.host != "upload.vk.test" else "upload"
+        calls.append(name)
+        if name == "photos.getWallUploadServer":
+            return httpx.Response(200, json={"response": {"upload_url": "https://upload.vk.test/u"}})
+        if name == "upload":
+            status = next(uploads, 200)
+            if status != 200:
+                return httpx.Response(status, text="gateway")
+            return httpx.Response(200, json={"server": 1, "photo": "[]", "hash": "h"})
+        if name == "photos.saveWallPhoto":
+            code = next(saves, None)
+            if code:
+                text = {100: "One of the parameters specified was missing or invalid: photo is undefined",
+                        15: "Access denied"}[code]
+                return httpx.Response(200, json={"error": {"error_code": code, "error_msg": text}})
+            return httpx.Response(200, json={"response": [{"owner_id": -241020718, "id": 77}]})
+        if name == "wall.post":
+            return httpx.Response(200, json={"response": {"post_id": 88}})
+        raise AssertionError(request.url)
+    return httpx.Client(transport=httpx.MockTransport(handler))
+
+
+def test_vk_publish_retries_a_transient_empty_upload(tmp_path):
+    """Разовый сбой «photo is undefined» не должен ронять публикацию: берётся новый адрес
+    загрузки и фото грузится заново (на боевой стене так падало примерно каждое третье)."""
+    card = tmp_path / "card.png"
+    card.write_bytes(b"PNG")
+    calls = []
+    http = _flaky_upload_transport([100], calls)
+    result = VkPublisher("T", -241020718, dry_run=False, http=http,
+                         upload_retry_delay=0).publish(card, "Пост")
+    assert result.ok and result.post_id == 88
+    assert calls.count("photos.getWallUploadServer") == 2
+    assert calls.count("wall.post") == 1
+
+
+def test_vk_publish_gives_up_after_all_empty_uploads_without_posting(tmp_path):
+    card = tmp_path / "card.png"
+    card.write_bytes(b"PNG")
+    calls = []
+    attempts = VkPublisher.UPLOAD_ATTEMPTS
+    http = _flaky_upload_transport([100] * attempts, calls)
+    result = VkPublisher("T", -241020718, dry_run=False, http=http,
+                         upload_retry_delay=0).publish(card, "Пост")
+    assert not result.ok and "photo is undefined" in result.error
+    assert calls.count("photos.getWallUploadServer") == attempts
+    assert "wall.post" not in calls
+
+
+def test_vk_publish_survives_several_failed_uploads_in_a_row(tmp_path):
+    """В боевой день VK подряд отвечал 504 и photo=[] — трёх попыток не хватало."""
+    card = tmp_path / "card.png"
+    card.write_bytes(b"PNG")
+    calls = []
+    http = _flaky_upload_transport([100, 100], calls, upload_statuses=[504, 502])
+    result = VkPublisher("T", -241020718, dry_run=False, http=http,
+                         upload_retry_delay=0).publish(card, "Пост")
+    assert result.ok and result.post_id == 88
+    assert calls.count("photos.getWallUploadServer") == 5
+
+
+def test_vk_publish_retries_a_gateway_timeout_of_the_upload_server(tmp_path):
+    """Сервер загрузки VK однажды ответил 504: это тоже разовый сбой, повторяем с новым адресом."""
+    card = tmp_path / "card.png"
+    card.write_bytes(b"PNG")
+    calls = []
+    http = _flaky_upload_transport([], calls, upload_statuses=[504])
+    result = VkPublisher("T", -241020718, dry_run=False, http=http,
+                         upload_retry_delay=0).publish(card, "Пост")
+    assert result.ok and result.post_id == 88
+    assert calls.count("photos.getWallUploadServer") == 2
+
+
+def test_vk_publish_does_not_retry_a_client_error_of_the_upload_server(tmp_path):
+    card = tmp_path / "card.png"
+    card.write_bytes(b"PNG")
+    calls = []
+    http = _flaky_upload_transport([], calls, upload_statuses=[413])
+    result = VkPublisher("T", -241020718, dry_run=False, http=http,
+                         upload_retry_delay=0).publish(card, "Пост")
+    assert not result.ok and "413" in result.error
+    assert calls.count("photos.getWallUploadServer") == 1
+
+
+def test_vk_publish_does_not_retry_access_errors(tmp_path):
+    card = tmp_path / "card.png"
+    card.write_bytes(b"PNG")
+    calls = []
+    http = _flaky_upload_transport([15], calls)
+    result = VkPublisher("T", -241020718, dry_run=False, http=http,
+                         upload_retry_delay=0).publish(card, "Пост")
+    assert not result.ok and "VK 15" in result.error
+    assert calls.count("photos.getWallUploadServer") == 1
+
+
 def test_vk_group_wall_uses_group_target_and_stops_if_token_cannot_upload(tmp_path):
     card = tmp_path / "card.png"
     card.write_bytes(b"PNG")
